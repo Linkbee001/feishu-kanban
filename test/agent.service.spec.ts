@@ -24,10 +24,6 @@ describe('AgentService', () => {
         findUnique: jest.fn(),
       },
     };
-    const intentMapper = {
-      detect: jest.fn(),
-      skillFor: jest.fn(),
-    };
     const groupSessions = {
       tryAcquireLock: jest.fn(),
       getBusyReason: jest.fn(),
@@ -37,6 +33,10 @@ describe('AgentService', () => {
     };
     const piMono = {
       cancelRun: jest.fn().mockResolvedValue(undefined),
+    };
+    const runtimeContext = {
+      assemble: jest.fn(),
+      toSessionStatus: jest.fn(),
     };
     const runQueueJob = {
       remove: jest.fn().mockResolvedValue(undefined),
@@ -52,15 +52,16 @@ describe('AgentService', () => {
     return {
       service: new AgentService(
         prisma as any,
-        intentMapper as any,
         groupSessions as any,
         piMono as any,
+        runtimeContext as any,
         agentRunQueue as any,
         artifactSyncQueue as any,
       ),
       prisma,
       groupSessions,
       piMono,
+      runtimeContext,
       agentRunQueue,
       runQueueJob,
     };

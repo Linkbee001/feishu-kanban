@@ -4,6 +4,7 @@ import { ConfirmationStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { assertConfirmationTransition } from '../../common/state/state-machine';
 import { AgentService } from '../agent/agent.service';
+import { ManagerConfirmationPayload } from '../agent/agent.types';
 import { GroupAgentSessionService } from '../agent/group-agent-session.service';
 import { FeishuService } from '../feishu/feishu.service';
 
@@ -24,6 +25,8 @@ export class ConfirmationService {
     actionType: string;
     payload: unknown;
     chatId: string;
+    summary?: string;
+    detail?: string;
   }) {
     const ttl = this.config.get<number>('CONFIRMATION_TTL_MINUTES') ?? 30;
     const expiresAt = new Date(Date.now() + ttl * 60_000);
@@ -37,7 +40,7 @@ export class ConfirmationService {
         expiresAt,
       },
     });
-    const card = this.buildCard(confirmation.id, input.actionType, expiresAt);
+    const card = this.buildCard(confirmation.id, input.actionType, expiresAt, input.summary, input.detail);
     const sent = await this.feishu.sendCard('chat_id', input.chatId, card);
     const cardMessageId = (sent as any)?.data?.message_id;
     return this.prisma.confirmationRequest.update({
@@ -69,7 +72,7 @@ export class ConfirmationService {
     });
 
     if (confirmation.projectId && confirmation.environmentId) {
-      const payload = confirmation.payload as any;
+      const payload = confirmation.payload as unknown as ManagerConfirmationPayload;
       if (confirmation.messageSource.sourceType === 'group') {
         const session = await this.groupSessions.getOrCreateSession(confirmation.messageSource.feishuChatId, {
           projectId: confirmation.projectId,
@@ -83,16 +86,18 @@ export class ConfirmationService {
           environmentId: confirmation.environmentId,
           feishuChatId: confirmation.messageSource.feishuChatId,
           messageSourceId: confirmation.messageSourceId,
-          prompt: payload.prompt ?? confirmation.messageSource.rawText,
+          prompt: payload.executionPrompt,
           intent: payload.intent ?? confirmation.actionType,
+          skillName: payload.skillHint ?? null,
         });
       } else {
         await this.agent.createRun({
           projectId: confirmation.projectId,
           environmentId: confirmation.environmentId,
           messageSourceId: confirmation.messageSourceId,
-          prompt: payload.prompt ?? confirmation.messageSource.rawText,
+          prompt: payload.executionPrompt,
           intent: payload.intent ?? confirmation.actionType,
+          skillName: payload.skillHint ?? null,
         });
       }
     }
@@ -131,7 +136,7 @@ export class ConfirmationService {
     throw new BadRequestException('Unknown confirmation card decision');
   }
 
-  private buildCard(id: string, actionType: string, expiresAt: Date) {
+  private buildCard(id: string, actionType: string, expiresAt: Date, summary?: string, detail?: string) {
     return {
       config: { wide_screen_mode: true },
       header: { title: { tag: 'plain_text', content: '需要确认' }, template: 'orange' },
@@ -140,7 +145,14 @@ export class ConfirmationService {
           tag: 'div',
           text: {
             tag: 'lark_md',
-            content: `动作：${actionType}\n过期时间：${expiresAt.toISOString()}`,
+            content: [
+              `动作：${actionType}`,
+              summary ? `说明：${summary}` : null,
+              detail ? `原因：${detail}` : null,
+              `过期时间：${expiresAt.toISOString()}`,
+            ]
+              .filter(Boolean)
+              .join('\n'),
           },
         },
         {

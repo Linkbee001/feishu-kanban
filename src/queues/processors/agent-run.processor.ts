@@ -4,9 +4,10 @@ import { AgentRunStatus } from '@prisma/client';
 import { Job } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AgentService } from '../../modules/agent/agent.service';
+import { AGENT_OUTPUT_SCHEMA } from '../../modules/agent/agent.schemas';
 import { GroupAgentSessionService } from '../../modules/agent/group-agent-session.service';
-import { IntentMapperService } from '../../modules/agent/intent-mapper.service';
 import { PiMonoAdapter } from '../../modules/agent/pi-mono.adapter';
+import { ProjectRuntimeContextService } from '../../modules/agent/project-runtime-context.service';
 import { AGENT_RUN_QUEUE, ARTIFACT_SYNC_QUEUE } from '../queue.constants';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -20,7 +21,7 @@ export class AgentRunProcessor extends WorkerHost {
     private readonly agent: AgentService,
     private readonly groupSessions: GroupAgentSessionService,
     private readonly piMono: PiMonoAdapter,
-    private readonly intentMapper: IntentMapperService,
+    private readonly runtimeContext: ProjectRuntimeContextService,
     @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactQueue: Queue,
   ) {
     super();
@@ -47,6 +48,16 @@ export class AgentRunProcessor extends WorkerHost {
         await this.groupSessions.rehydrateSession(groupSession.feishuChatId);
       }
 
+      const projectContextBundle = await this.runtimeContext.assemble({
+        projectId: run.project.id,
+        environmentId: run.environment.id,
+        runtimeSessionKey:
+          groupSession?.runtimeSessionKey ?? this.groupSessions.createRuntimeSessionKey(run.project.feishuChatId),
+        sessionMode: groupSession?.sessionMode ?? 'active',
+        sessionStatus: this.runtimeContext.toSessionStatus(groupSession?.status),
+        memorySummary: groupSession?.memorySummary ?? null,
+      });
+
       const execution = await this.piMono.executeRun(run.id, {
         runtimeSessionKey:
           groupSession?.runtimeSessionKey ?? this.groupSessions.createRuntimeSessionKey(run.project.feishuChatId),
@@ -54,6 +65,8 @@ export class AgentRunProcessor extends WorkerHost {
         agentScopeKey:
           groupSession?.agentScopeKey ?? this.groupSessions.createAgentScopeKey(run.projectId),
         sessionMode: groupSession?.sessionMode ?? 'active',
+        requestKind: 'formal_execution',
+        projectContextBundle,
         project: { id: run.project.id, name: run.project.name, feishuChatId: run.project.feishuChatId },
         environment: {
           id: run.environment.id,
@@ -75,7 +88,7 @@ export class AgentRunProcessor extends WorkerHost {
         intent: run.intent,
         skillName: run.skillName,
         prompt: run.prompt,
-        outputSchema: this.intentMapper.outputSchema(),
+        outputSchema: AGENT_OUTPUT_SCHEMA,
       });
 
       if (groupSession) {

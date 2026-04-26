@@ -2,7 +2,7 @@ import { AgentRunStatus, ArtifactStatus } from '@prisma/client';
 import { ArtifactSyncProcessor } from '../src/queues/processors/artifact-sync.processor';
 
 describe('ArtifactSyncProcessor', () => {
-  it('marks the run as failed and reports sync failures instead of sending a fake title link', async () => {
+  it('marks the run as failed and reports sync failures', async () => {
     const prisma = {
       agentRun: {
         findUnique: jest.fn().mockResolvedValue({
@@ -11,11 +11,12 @@ describe('ArtifactSyncProcessor', () => {
           rawOutputs: [
             {
               type: 'document',
-              title: '项目说明文档 - README.md',
+              title: 'README.md',
               content: '# Hello',
             },
           ],
-          environment: { name: '默认主环境' },
+          project: { feishuChatId: 'chat_project' },
+          environment: { name: 'Default Environment' },
           messageSource: { feishuChatId: 'chat_1' },
         }),
       },
@@ -24,7 +25,7 @@ describe('ArtifactSyncProcessor', () => {
       createFromOutput: jest.fn().mockResolvedValue({ id: 'artifact_1' }),
       syncArtifact: jest.fn().mockResolvedValue({
         id: 'artifact_1',
-        title: '项目说明文档 - README.md',
+        title: 'README.md',
         status: ArtifactStatus.failed,
         metadata: {
           syncError: 'Feishu non-JSON response: 404 page not found',
@@ -52,12 +53,60 @@ describe('ArtifactSyncProcessor', () => {
     expect(feishu.sendTextMessage).toHaveBeenCalledWith(
       'chat_id',
       'chat_1',
-      expect.stringContaining('同步失败'),
+      expect.stringContaining('sync failed'),
     );
-    expect(feishu.sendTextMessage).not.toHaveBeenCalledWith(
+  });
+
+  it('sends scheduled digest summaries to the project group when configured for group delivery', async () => {
+    const prisma = {
+      agentRun: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'run_digest',
+          intent: 'progress_summary',
+          rawOutputs: [
+            {
+              type: 'summary',
+              title: '项目现状摘要',
+              content: '# Digest\nEverything is healthy.',
+              metadata: {
+                internalOnly: false,
+                targetChannels: ['group_message'],
+              },
+            },
+          ],
+          project: { feishuChatId: 'chat_project' },
+          environment: { name: 'Default Environment' },
+          messageSource: null,
+        }),
+      },
+    };
+    const artifacts = {
+      createFromOutput: jest.fn().mockResolvedValue({ id: 'artifact_1' }),
+      syncArtifact: jest.fn().mockResolvedValue({
+        id: 'artifact_1',
+        title: '项目现状摘要',
+        status: ArtifactStatus.synced,
+      }),
+    };
+    const agent = {
+      transition: jest.fn().mockResolvedValue(undefined),
+    };
+    const feishu = {
+      sendTextMessage: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const processor = new ArtifactSyncProcessor(prisma as any, artifacts as any, agent as any, feishu as any);
+    await processor.process({ data: { agentRunId: 'run_digest' } } as any);
+
+    expect(agent.transition).toHaveBeenCalledWith(
+      'run_digest',
+      AgentRunStatus.succeeded,
+      expect.objectContaining({ progress: 100 }),
+    );
+    expect(feishu.sendTextMessage).toHaveBeenCalledWith(
       'chat_id',
-      'chat_1',
-      expect.stringContaining('http://README.md'),
+      'chat_project',
+      '# Digest\nEverything is healthy.',
     );
   });
 });

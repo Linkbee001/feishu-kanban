@@ -52,7 +52,7 @@ export class ArtifactSyncProcessor extends WorkerHost {
         .map((artifact) => {
           const syncError =
             artifact.metadata && typeof artifact.metadata === 'object'
-              ? ((artifact.metadata as Record<string, unknown>)['syncError'] as string | undefined)
+              ? ((artifact.metadata as Record<string, unknown>).syncError as string | undefined)
               : undefined;
           return syncError ? `${artifact.title}: ${syncError}` : artifact.title;
         })
@@ -66,29 +66,56 @@ export class ArtifactSyncProcessor extends WorkerHost {
       });
 
       if (run.messageSource?.feishuChatId) {
-        const lines = failed.map((artifact) => `${artifact.title}: 同步失败`);
+        const lines = failed.map((artifact) => `${artifact.title}: sync failed`);
         await this.feishu.sendTextMessage(
           'chat_id',
           run.messageSource.feishuChatId,
-          `执行失败：${run.intent}\n环境：${run.environment.name}\n执行ID：${run.id}\n${lines.join('\n')}`,
+          `Execution failed: ${run.intent}\nEnvironment: ${run.environment.name}\nRun ID: ${run.id}\n${lines.join('\n')}`,
         );
       }
       return;
     }
 
     await this.agent.transition(run.id, AgentRunStatus.succeeded, { progress: 100, finishedAt: new Date() });
+
     if (run.messageSource?.feishuChatId) {
       const links = synced.map((artifact) => this.formatArtifactLine(artifact)).join('\n');
       await this.feishu.sendTextMessage(
         'chat_id',
         run.messageSource.feishuChatId,
-        `执行完成：${run.intent}\n环境：${run.environment.name}\n执行ID：${run.id}\n${links}`,
+        `Execution completed: ${run.intent}\nEnvironment: ${run.environment.name}\nRun ID: ${run.id}\n${links}`,
       );
+      return;
     }
+
+    const digestSummary = this.getDigestSummaryOutput(outputs);
+    if (digestSummary && run.project.feishuChatId) {
+      await this.feishu.sendTextMessage('chat_id', run.project.feishuChatId, digestSummary.content ?? digestSummary.title);
+    }
+  }
+
+  private getDigestSummaryOutput(outputs: AgentOutput[]) {
+    const summary = outputs.find((output) => output.type === 'summary');
+    if (!summary) {
+      return null;
+    }
+
+    const metadata =
+      summary.metadata && typeof summary.metadata === 'object' && !Array.isArray(summary.metadata)
+        ? summary.metadata
+        : null;
+    const targetChannels = Array.isArray(metadata?.targetChannels) ? metadata.targetChannels : [];
+    const internalOnly = metadata?.internalOnly === true;
+
+    if (internalOnly || !targetChannels.includes('group_message')) {
+      return null;
+    }
+
+    return summary;
   }
 
   private formatArtifactLine(artifact: SyncedArtifact) {
     const target = artifact.feishuUrl ?? artifact.bitableRecordId ?? artifact.fileKey;
-    return target ? `${artifact.title}: ${target}` : `${artifact.title}: 已同步完成`;
+    return target ? `${artifact.title}: ${target}` : `${artifact.title}: synced`;
   }
 }

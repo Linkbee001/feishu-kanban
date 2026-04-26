@@ -8,7 +8,17 @@ export class AgentController {
   constructor(private readonly agentService: AgentService) {}
 
   @Post()
-  create(@Body() body: { projectId: string; environmentId: string; messageSourceId?: string; prompt: string; intent?: string }) {
+  create(
+    @Body()
+    body: {
+      projectId: string;
+      environmentId: string;
+      messageSourceId?: string;
+      prompt: string;
+      intent?: string;
+      skillName?: string | null;
+    },
+  ) {
     return this.agentService.createRun(body);
   }
 

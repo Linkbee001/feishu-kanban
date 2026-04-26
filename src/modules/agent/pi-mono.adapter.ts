@@ -5,7 +5,15 @@ import Redis from 'ioredis';
 import * as path from 'path';
 import type { AgentSession, ModelRegistry, SessionManager } from '@mariozechner/pi-coding-agent';
 import { GROUP_AGENT_SESSION_REDIS } from './agent.constants';
-import { AgentOutput, PiMonoCreateRunRequest, PiMonoExecutionResult, PiMonoSessionSnapshot } from './agent.types';
+import {
+  AgentOutput,
+  ManagerInteractiveDecision,
+  PiMonoCreateRunRequest,
+  PiMonoExecutionResult,
+  PiMonoSessionSnapshot,
+} from './agent.types';
+import { MANAGER_INTERACTIVE_DECISION_SCHEMA } from './agent.schemas';
+import { resolveBundledPiSkillsDir } from './pi-skill-mapping';
 
 type PiSdkModule = typeof import('@mariozechner/pi-coding-agent');
 
@@ -21,7 +29,9 @@ type SessionRuntimeState = {
 
 type ActiveExecutionState = {
   runId?: string;
+  mode: 'outputs' | 'decision';
   outputs: AgentOutput[];
+  decision?: ManagerInteractiveDecision;
   emitted: boolean;
   canceled: boolean;
   timedOut: boolean;
@@ -29,6 +39,10 @@ type ActiveExecutionState = {
 
 type EmitOutputsArgs = {
   outputs?: unknown;
+};
+
+type EmitDecisionArgs = {
+  decision?: unknown;
 };
 
 const nativeDynamicImport = new Function('specifier', 'return import(specifier)') as <T>(specifier: string) => Promise<T>;
@@ -57,9 +71,55 @@ export class PiMonoAdapter {
   async executeRun(runId: string, payload: PiMonoCreateRunRequest): Promise<PiMonoExecutionResult> {
     return this.executePrompt({
       runId,
-      payload,
+      payload: {
+        ...payload,
+        requestKind: payload.requestKind ?? 'formal_execution',
+      },
       timeoutMs: this.resolveTimeoutMs(),
     });
+  }
+
+  async runManagerDecision(input: {
+    runtimeSessionKey: string;
+    agentScopeKey?: string;
+    sessionStoreRef?: string | null;
+    sessionMode?: 'bootstrap' | 'active' | 'disabled';
+    projectContextBundle?: PiMonoCreateRunRequest['projectContextBundle'];
+    project: PiMonoCreateRunRequest['project'];
+    environment: PiMonoCreateRunRequest['environment'];
+    source: PiMonoCreateRunRequest['source'];
+    prompt: string;
+    timeoutMs?: number;
+  }): Promise<ManagerInteractiveDecision> {
+    const result = await this.executeDecisionPrompt({
+      payload: {
+        runtimeSessionKey: input.runtimeSessionKey,
+        sessionStoreRef: input.sessionStoreRef ?? null,
+        agentScopeKey: input.agentScopeKey,
+        sessionMode: input.sessionMode ?? 'active',
+        requestKind: 'interactive_decision',
+        wakeMode: 'interactive',
+        projectContextBundle: input.projectContextBundle,
+        project: input.project,
+        environment: input.environment,
+        source: input.source,
+        intent: 'requirement_analysis',
+        skillName: null,
+        prompt: input.prompt,
+        outputSchema: MANAGER_INTERACTIVE_DECISION_SCHEMA,
+      },
+      timeoutMs: input.timeoutMs ?? 20_000,
+    });
+
+    if (result.status === 'succeeded' && result.decision) {
+      return result.decision;
+    }
+
+    if (result.status === 'timeout') {
+      throw new BadGatewayException('pi mono manager decision timed out');
+    }
+
+    throw new BadGatewayException('pi mono manager decision was canceled');
   }
 
   async runPrompt(input: {
@@ -75,6 +135,7 @@ export class PiMonoAdapter {
       payload: {
         runtimeSessionKey: input.sessionKey,
         sessionMode: 'bootstrap',
+        requestKind: 'bootstrap',
         project: {
           id: 'bootstrap-project',
           name: input.projectName ?? 'Bootstrap Project',
@@ -163,6 +224,7 @@ export class PiMonoAdapter {
     });
     const execution: ActiveExecutionState = {
       runId: input.runId,
+      mode: 'outputs',
       outputs: [],
       emitted: false,
       canceled: false,
@@ -249,6 +311,84 @@ export class PiMonoAdapter {
     }
   }
 
+  private async executeDecisionPrompt(input: {
+    payload: PiMonoCreateRunRequest;
+    timeoutMs: number;
+  }): Promise<{ status: 'succeeded' | 'timeout' | 'canceled'; decision?: ManagerInteractiveDecision; session: PiMonoSessionSnapshot }> {
+    const state = await this.ensureSession({
+      runtimeSessionKey: input.payload.runtimeSessionKey,
+      sessionStoreRef: input.payload.sessionStoreRef,
+      projectPath: input.payload.environment.projectPath,
+    });
+    const execution: ActiveExecutionState = {
+      mode: 'decision',
+      outputs: [],
+      emitted: false,
+      canceled: false,
+      timedOut: false,
+    };
+    state.activeExecution = execution;
+
+    let timeoutHandle: NodeJS.Timeout | undefined;
+
+    try {
+      timeoutHandle = setTimeout(() => {
+        execution.timedOut = true;
+        void state.session.abort().catch((error) => {
+          this.logger.warn(
+            `Failed to abort timed out pi mono session ${state.runtimeSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      }, input.timeoutMs);
+
+      await state.session.prompt(this.buildPrompt(input.payload));
+
+      const lastAssistantText = state.session.getLastAssistantText()?.trim();
+      state.lastAssistantText = lastAssistantText;
+
+      if (execution.timedOut) {
+        throw new PiMonoExecutionAbortError('TIMEOUT', 'pi mono manager decision timed out');
+      }
+      if (execution.canceled) {
+        throw new PiMonoExecutionAbortError('CANCELED', 'pi mono manager decision canceled');
+      }
+      if (!execution.decision) {
+        throw new Error('PiMono manager decision completed without emit_decision');
+      }
+
+      return {
+        status: 'succeeded',
+        decision: execution.decision,
+        session: this.buildSessionSnapshot(state, undefined, lastAssistantText),
+      };
+    } catch (error) {
+      const lastAssistantText = state.session.getLastAssistantText()?.trim();
+      state.lastAssistantText = lastAssistantText;
+
+      if (execution.timedOut || (error instanceof PiMonoExecutionAbortError && error.code === 'TIMEOUT')) {
+        return {
+          status: 'timeout',
+          session: this.buildSessionSnapshot(state, undefined, lastAssistantText),
+        };
+      }
+
+      if (execution.canceled || (error instanceof PiMonoExecutionAbortError && error.code === 'CANCELED')) {
+        return {
+          status: 'canceled',
+          session: this.buildSessionSnapshot(state, undefined, lastAssistantText),
+        };
+      }
+
+      throw error;
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
+      state.activeExecution = undefined;
+    }
+  }
+
   private async ensureSession(input: {
     runtimeSessionKey: string;
     sessionStoreRef?: string | null;
@@ -286,6 +426,18 @@ export class PiMonoAdapter {
       cwd,
       sessionStoreRef: normalizedStoreRef,
     });
+    const ResourceLoaderCtor = (sdk as { DefaultResourceLoader?: new (...args: any[]) => { reload(): Promise<void> } })
+      .DefaultResourceLoader;
+    const resourceLoader = ResourceLoaderCtor
+      ? new ResourceLoaderCtor({
+          cwd,
+          agentDir,
+          additionalSkillPaths: [resolveBundledPiSkillsDir()],
+        })
+      : undefined;
+    if (resourceLoader) {
+      await resourceLoader.reload();
+    }
 
     const state: SessionRuntimeState = {
       runtimeSessionKey: input.runtimeSessionKey,
@@ -297,7 +449,7 @@ export class PiMonoAdapter {
       activeExecution: undefined,
     };
 
-    const { session } = await sdk.createAgentSession({
+    const sessionOptions: any = {
       cwd,
       agentDir,
       authStorage,
@@ -305,9 +457,12 @@ export class PiMonoAdapter {
       model,
       thinkingLevel: this.resolveThinkingLevel(),
       sessionManager,
-      tools: ['read', 'grep', 'find', 'ls', 'emit_outputs'],
-      customTools: [this.createEmitOutputsTool(state)],
-    });
+      ...(resourceLoader ? { resourceLoader } : {}),
+      tools: ['read', 'grep', 'find', 'ls', 'emit_outputs', 'emit_decision'],
+      customTools: [this.createEmitOutputsTool(state), this.createEmitDecisionTool(state)],
+    };
+
+    const { session } = await sdk.createAgentSession(sessionOptions);
 
     state.session = session;
     state.sessionStoreRef = sessionManager.getSessionFile() ?? state.sessionStoreRef;
@@ -356,6 +511,9 @@ export class PiMonoAdapter {
         if (!activeExecution) {
           throw new Error('emit_outputs called outside an active execution');
         }
+        if (activeExecution.mode !== 'outputs') {
+          throw new Error('emit_outputs is only available during formal execution');
+        }
 
         const outputs = this.normalizeOutputs(params.outputs);
         if (!outputs.length) {
@@ -366,6 +524,47 @@ export class PiMonoAdapter {
         activeExecution.emitted = true;
         return {
           content: [{ type: 'text', text: `Captured ${outputs.length} structured outputs.` }],
+        };
+      },
+    } as any;
+  }
+
+  private createEmitDecisionTool(state: SessionRuntimeState) {
+    return {
+      name: 'emit_decision',
+      label: 'emit_decision',
+      description: 'Emit the structured manager interaction decision for the Feishu backend.',
+      promptSnippet: 'emit_decision(decision): send the final manager interaction decision to the backend.',
+      promptGuidelines: [
+        'Call emit_decision exactly once after deciding whether to ask a follow-up question, request confirmation, or execute.',
+        'Use ask_followup instead of guessing when the request is ambiguous or missing key constraints.',
+      ],
+      parameters: {
+        type: 'object',
+        properties: {
+          decision: MANAGER_INTERACTIVE_DECISION_SCHEMA,
+        },
+        required: ['decision'],
+        additionalProperties: false,
+      } as any,
+      execute: async (_toolCallId: string, params: EmitDecisionArgs) => {
+        const activeExecution = state.activeExecution;
+        if (!activeExecution) {
+          throw new Error('emit_decision called outside an active execution');
+        }
+        if (activeExecution.mode !== 'decision') {
+          throw new Error('emit_decision is only available during manager decision runs');
+        }
+
+        const decision = this.normalizeDecision(params.decision);
+        if (!decision) {
+          throw new Error('emit_decision requires a valid ManagerInteractiveDecision');
+        }
+
+        activeExecution.decision = decision;
+        activeExecution.emitted = true;
+        return {
+          content: [{ type: 'text', text: `Captured decision: ${decision.action}` }],
         };
       },
     } as any;
@@ -416,25 +615,103 @@ export class PiMonoAdapter {
     return true;
   }
 
+  private normalizeDecision(value: unknown): ManagerInteractiveDecision | null {
+    return this.isManagerInteractiveDecision(value) ? value : null;
+  }
+
+  private isManagerInteractiveDecision(value: unknown): value is ManagerInteractiveDecision {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+
+    const item = value as Record<string, unknown>;
+    if (!['ask_followup', 'request_confirmation', 'execute'].includes(String(item.action))) {
+      return false;
+    }
+    if (!['low', 'medium', 'high'].includes(String(item.confidence))) {
+      return false;
+    }
+    if (typeof item.reason !== 'string' || !item.reason.trim()) {
+      return false;
+    }
+    if (typeof item.reply !== 'string' || !item.reply.trim()) {
+      return false;
+    }
+    if (typeof item.intent !== 'string' || !item.intent.trim()) {
+      return false;
+    }
+    if (item.executionGoal !== undefined && typeof item.executionGoal !== 'string') {
+      return false;
+    }
+    if (item.executionPrompt !== undefined && typeof item.executionPrompt !== 'string') {
+      return false;
+    }
+    if (item.outputMode !== undefined && !['summary', 'document', 'task', 'file', 'mixed'].includes(String(item.outputMode))) {
+      return false;
+    }
+    if (item.targetChannels !== undefined) {
+      if (!Array.isArray(item.targetChannels)) {
+        return false;
+      }
+      for (const channel of item.targetChannels) {
+        if (!['group_message', 'feishu_doc', 'bitable', 'internal_digest'].includes(String(channel))) {
+          return false;
+        }
+      }
+    }
+    if (item.skillHint !== undefined && item.skillHint !== null && typeof item.skillHint !== 'string') {
+      return false;
+    }
+    if (item.metadata !== undefined && (!item.metadata || typeof item.metadata !== 'object' || Array.isArray(item.metadata))) {
+      return false;
+    }
+    return true;
+  }
+
   private buildPrompt(payload: PiMonoCreateRunRequest): string {
+    const requestKind = payload.requestKind ?? 'formal_execution';
+    const decisionMode = requestKind === 'interactive_decision';
+    const promptGuidance = decisionMode
+      ? [
+          'You are the manager agent for a Feishu project collaboration workspace.',
+          'Your job in this turn is to decide the next interaction step before any formal execution happens.',
+          'If the request is ambiguous, missing key constraints, or you are not confident, ask exactly one concise follow-up question.',
+          'If the request is clear but risky or likely to cause unwanted side effects, request confirmation.',
+          'If the request is clear enough to proceed, choose execute and provide an executionGoal and executionPrompt.',
+          'Call emit_decision exactly once with the final structured decision.',
+          'Do not call emit_outputs during manager decision runs.',
+        ]
+      : [
+          'You are running as PiMono for the Feishu project collaboration backend.',
+          'This turn is a formal execution run that may produce persisted artifacts.',
+          'When you are ready to produce the final formal result, call emit_outputs exactly once.',
+          'Do not return raw JSON in assistant text.',
+          'If no formal document, task, file, or log is needed, emit one summary output.',
+        ];
+
     return [
-      'You are running as PiMono for the Feishu project collaboration backend.',
+      ...promptGuidance,
       `Runtime session: ${payload.runtimeSessionKey}`,
       `Agent scope: ${payload.agentScopeKey ?? 'not configured'}`,
       `Session mode: ${payload.sessionMode ?? 'active'}`,
+      `Request kind: ${requestKind}`,
+      `Wake mode: ${payload.wakeMode ?? 'interactive'}`,
+      `Digest type: ${payload.digestType ?? 'none'}`,
       `Project: ${payload.project.name} (${payload.project.id})`,
       `Environment: ${payload.environment.name} (${payload.environment.id})`,
       `Repository: ${payload.environment.repoUrl ?? 'not configured'}`,
       `Branch: ${payload.environment.repoBranch ?? 'not configured'}`,
       `Intent: ${payload.intent}`,
-      `Recommended skill: ${payload.skillName ?? 'none'}`,
       '',
       'Available built-in tools are read-only: read, grep, find, ls.',
-      'When you are ready to produce the final formal result, call emit_outputs exactly once.',
-      'Do not return raw JSON in assistant text.',
-      'If no formal document, task, file, or log is needed, emit one summary output.',
+      payload.projectContextBundle
+        ? 'A serialized project context bundle is attached below. Reuse it instead of guessing project state.'
+        : 'No project context bundle is attached.',
       `Target output schema: ${JSON.stringify(payload.outputSchema)}`,
       '',
+      ...(payload.projectContextBundle
+        ? ['Project context bundle (JSON):', JSON.stringify(payload.projectContextBundle), '']
+        : []),
       'User request:',
       payload.prompt,
     ].join('\n');

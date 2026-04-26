@@ -186,6 +186,79 @@ export class FeishuService {
     });
   }
 
+  async listDriveFiles(input: {
+    folderToken: string;
+    pageToken?: string;
+    pageSize?: number;
+    orderBy?: string;
+    direction?: 'ASC' | 'DESC';
+  }) {
+    const query: Record<string, string> = {
+      folder_token: input.folderToken,
+      page_size: String(input.pageSize ?? 100),
+    };
+    if (input.pageToken) {
+      query.page_token = input.pageToken;
+    }
+    if (input.orderBy) {
+      query.order_by = input.orderBy;
+    }
+    if (input.direction) {
+      query.direction = input.direction;
+    }
+    return this.request<any>('/drive/v1/files', {
+      method: 'GET',
+      query,
+    });
+  }
+
+  async getDocument(documentId: string) {
+    return this.request<any>(`/docx/v1/documents/${encodeURIComponent(documentId)}`, {
+      method: 'GET',
+    });
+  }
+
+  async getDocumentRawContent(documentId: string, lang?: number) {
+    const query: Record<string, string> = {};
+    if (lang !== undefined) {
+      query.lang = String(lang);
+    }
+    return this.request<any>(`/docx/v1/documents/${encodeURIComponent(documentId)}/raw_content`, {
+      method: 'GET',
+      query,
+    });
+  }
+
+  async listBitableFields(appToken: string, tableId: string) {
+    return this.request<any>(
+      `/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/fields`,
+      {
+        method: 'GET',
+      },
+    );
+  }
+
+  async listBitableRecords(input: {
+    appToken: string;
+    tableId: string;
+    pageToken?: string;
+    pageSize?: number;
+  }) {
+    const query: Record<string, string> = {
+      page_size: String(input.pageSize ?? 500),
+    };
+    if (input.pageToken) {
+      query.page_token = input.pageToken;
+    }
+    return this.request<any>(
+      `/bitable/v1/apps/${encodeURIComponent(input.appToken)}/tables/${encodeURIComponent(input.tableId)}/records`,
+      {
+        method: 'GET',
+        query,
+      },
+    );
+  }
+
   async deleteChatTab(chatId: string, chatTabId: string) {
     return this.request<any>(`/im/v1/chats/${encodeURIComponent(chatId)}/chat_tabs/${encodeURIComponent(chatTabId)}`, {
       method: 'DELETE',

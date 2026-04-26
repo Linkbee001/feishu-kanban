@@ -274,8 +274,13 @@ model GroupAgentSession {
   activeLockToken     String?            @map("active_lock_token")
   memorySummary       String?            @map("memory_summary")
   sessionState        Json               @default("{}") @map("session_state")
+  summaryPolicyJson   Json               @default("{}") @map("summary_policy_json")
   lastMessageAt       DateTime?          @map("last_message_at")
   lastRunAt           DateTime?          @map("last_run_at")
+  lastDigestAt        DateTime?          @map("last_digest_at")
+  lastDigestType      String?            @map("last_digest_type")
+  lastDigestHash      String?            @map("last_digest_hash")
+  lastDigestRunId     String?            @map("last_digest_run_id") @db.Uuid
   lastError           String?            @map("last_error")
   createdAt           DateTime           @default(now()) @map("created_at")
   updatedAt           DateTime           @updatedAt @map("updated_at")

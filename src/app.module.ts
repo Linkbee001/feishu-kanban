@@ -19,6 +19,7 @@ import {
   CLEANUP_QUEUE,
   FEISHU_EVENT_QUEUE,
   NOTIFICATION_QUEUE,
+  PROJECT_DIGEST_QUEUE,
 } from './queues/queue.constants';
 
 @Module({
@@ -34,6 +35,7 @@ import {
       { name: ARTIFACT_SYNC_QUEUE },
       { name: NOTIFICATION_QUEUE },
       { name: CLEANUP_QUEUE },
+      { name: PROJECT_DIGEST_QUEUE },
     ),
     PrismaModule,
     HealthModule,

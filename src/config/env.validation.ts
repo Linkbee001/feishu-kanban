@@ -32,4 +32,10 @@ export const envValidationSchema = Joi.object({
   PUBLIC_BASE_URL: Joi.string().uri().required(),
   CONFIRMATION_TTL_MINUTES: Joi.number().default(30),
   AGENT_RUN_TIMEOUT_SECONDS: Joi.number().default(1800),
+  DIGEST_TIMEZONE: Joi.string().default('Asia/Shanghai'),
+  DIGEST_DAILY_CRON: Joi.string().default('0 10 * * 1-5'),
+  DIGEST_WEEKLY_CRON: Joi.string().default('0 17 * * 5'),
+  DIGEST_FOLDER_SCAN_LIMIT: Joi.number().default(500),
+  DIGEST_DOC_CONTENT_LIMIT: Joi.number().default(20),
+  DIGEST_BITABLE_ROW_LIMIT: Joi.number().default(2000),
 });

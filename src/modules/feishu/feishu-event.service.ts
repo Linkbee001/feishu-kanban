@@ -6,7 +6,6 @@ import { FEISHU_EVENT_QUEUE } from '../../queues/queue.constants';
 import { AgentOutput } from '../agent/agent.types';
 import { AgentService } from '../agent/agent.service';
 import { GroupAgentSessionService } from '../agent/group-agent-session.service';
-import { IntentMapperService } from '../agent/intent-mapper.service';
 import { PiMonoAdapter } from '../agent/pi-mono.adapter';
 import { ConfirmationService } from '../confirmation/confirmation.service';
 import { ConversationService } from '../conversation/conversation.service';
@@ -39,7 +38,6 @@ export class FeishuEventService {
     private readonly agent: AgentService,
     private readonly groupSessions: GroupAgentSessionService,
     private readonly environments: EnvironmentService,
-    private readonly intentMapper: IntentMapperService,
     private readonly piMono: PiMonoAdapter,
     private readonly projects: ProjectService,
     private readonly conversations: ConversationService,
@@ -89,7 +87,6 @@ export class FeishuEventService {
       sourceType === 'group'
         ? { receiveIdType: 'chat_id', receiveId: chatId }
         : { receiveIdType: 'open_id', receiveId: senderOpenId };
-    const intent = this.intentMapper.detect(rawText);
 
     if (sourceType === 'private') {
       const selection = await this.trySelectProjectFromPrivateChat(chatId, senderOpenId, rawText);
@@ -150,34 +147,42 @@ export class FeishuEventService {
       },
     });
 
-    if (this.intentMapper.requiresConfirmation(intent)) {
-      await this.confirmations.create({
-        projectId: project.id,
-        environmentId: environment.id,
-        messageSourceId: source.id,
-        actionType: intent,
-        payload: { prompt: rawText, intent },
-        chatId,
-      });
-      return;
-    }
-
-    const submission = await this.agent.submitGroupMessage({
+    const submission = await this.agent.handleInteractiveGroupMessage({
       sessionId: session.id,
       projectId: project.id,
       environmentId: environment.id,
       feishuChatId: chatId,
       messageSourceId: source.id,
       prompt: rawText,
-      intent,
+      senderOpenId,
+      traceId,
     });
+
+    if (submission.status === 'followup') {
+      await this.feishu.sendTextMessage(replyTarget.receiveIdType, replyTarget.receiveId, submission.reply);
+      return;
+    }
+
+    if (submission.status === 'confirmation_requested') {
+      await this.confirmations.create({
+        projectId: project.id,
+        environmentId: environment.id,
+        messageSourceId: source.id,
+        actionType: submission.actionType,
+        payload: submission.confirmationPayload,
+        chatId,
+        summary: submission.reply,
+        detail: submission.decision.reason,
+      });
+      return;
+    }
 
     if (submission.status === 'rejected_busy') {
       await this.feishu.sendTextMessage(replyTarget.receiveIdType, replyTarget.receiveId, this.buildBusyReply());
       return;
     }
 
-    if (submission.status === 'failed' || !submission.runId) {
+    if (submission.status === 'failed' || submission.status !== 'accepted' || !submission.runId) {
       await this.feishu.sendTextMessage(
         replyTarget.receiveIdType,
         replyTarget.receiveId,
@@ -190,7 +195,9 @@ export class FeishuEventService {
       replyTarget.receiveIdType,
       replyTarget.receiveId,
       [
-        `已开始执行：${intent}`,
+        submission.reply,
+        '',
+        `已开始执行：${submission.decision.intent}`,
         `环境：${environment.name}`,
         `仓库：${environment.repoUrl ?? '未配置'}`,
         `分支：${environment.repoBranch ?? '未配置'}`,
@@ -275,7 +282,6 @@ export class FeishuEventService {
       const outputs = await this.piMono.runPrompt({
         sessionKey: runtimeSessionKey,
         intent: 'project_init',
-        skillName: 'project_init',
         projectName: 'Feishu Group Bootstrap',
         prompt: this.buildProjectInitPrompt(rawText, draft),
         timeoutMs: 15_000,

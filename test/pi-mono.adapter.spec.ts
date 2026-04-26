@@ -102,7 +102,7 @@ describe('PiMonoAdapter', () => {
     expect(fakeSdk.SessionManager.create).toHaveBeenCalled();
     expect(fakeSdk.createAgentSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        tools: ['read', 'grep', 'find', 'ls', 'emit_outputs'],
+        tools: ['read', 'grep', 'find', 'ls', 'emit_outputs', 'emit_decision'],
       }),
     );
     expect(adapter.getSessionSnapshot('chat:chat_1:manager')).toEqual(

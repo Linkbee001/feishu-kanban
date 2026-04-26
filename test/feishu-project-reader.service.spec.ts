@@ -1,0 +1,149 @@
+import { FeishuProjectReader } from '../src/modules/feishu/feishu-project-reader.service';
+
+describe('FeishuProjectReader', () => {
+  function createReader(overrides: Record<string, unknown> = {}) {
+    const config = {
+      get: jest.fn((key: string) => {
+        const values: Record<string, unknown> = {
+          DIGEST_FOLDER_SCAN_LIMIT: 500,
+          DIGEST_DOC_CONTENT_LIMIT: 20,
+          DIGEST_BITABLE_ROW_LIMIT: 2000,
+          ...overrides,
+        };
+        return values[key];
+      }),
+    };
+    const feishu = {
+      listDriveFiles: jest.fn(),
+      getDocumentRawContent: jest.fn(),
+      listBitableFields: jest.fn(),
+      listBitableRecords: jest.fn(),
+    };
+
+    return {
+      reader: new FeishuProjectReader(feishu as any, config as any),
+      feishu,
+    };
+  }
+
+  it('recursively scans the project folder and reads only the newest document contents up to the configured limit', async () => {
+    const { reader, feishu } = createReader({
+      DIGEST_DOC_CONTENT_LIMIT: 1,
+    });
+
+    feishu.listDriveFiles.mockImplementation(async ({ folderToken }: { folderToken: string }) => {
+      if (folderToken === 'root') {
+        return {
+          data: {
+            files: [
+              {
+                token: 'sub_1',
+                type: 'folder',
+                name: 'Sub Folder',
+                edit_time: '2026-04-20T00:00:00.000Z',
+              },
+              {
+                token: 'doc_old',
+                type: 'docx',
+                name: 'Old Doc',
+                edit_time: '2026-04-20T00:00:00.000Z',
+              },
+            ],
+            has_more: false,
+          },
+        };
+      }
+
+      return {
+        data: {
+          files: [
+            {
+              token: 'doc_new',
+              type: 'docx',
+              name: 'New Doc',
+              edit_time: '2026-04-25T00:00:00.000Z',
+            },
+          ],
+          has_more: false,
+        },
+      };
+    });
+    feishu.getDocumentRawContent.mockResolvedValue({
+      data: {
+        content: 'Latest document body',
+      },
+    });
+
+    const result = await reader.scanProjectFolder('root');
+
+    expect(result.truncated).toBe(false);
+    expect(result.entries.map((item) => item.token)).toEqual(['sub_1', 'doc_old', 'doc_new']);
+    expect(result.documents).toHaveLength(1);
+    expect(result.documents[0]).toEqual(
+      expect.objectContaining({
+        token: 'doc_new',
+        summary: 'Latest document body',
+      }),
+    );
+    expect(feishu.getDocumentRawContent).toHaveBeenCalledTimes(1);
+    expect(feishu.getDocumentRawContent).toHaveBeenCalledWith('doc_new');
+  });
+
+  it('computes bitable task stats from existing field names', async () => {
+    const { reader, feishu } = createReader();
+
+    feishu.listBitableFields.mockResolvedValue({
+      data: {
+        items: [
+          { field_id: 'fld_status', field_name: '状态' },
+          { field_id: 'fld_owner', field_name: '负责人' },
+          { field_id: 'fld_due', field_name: '截止日期' },
+        ],
+      },
+    });
+    feishu.listBitableRecords.mockResolvedValue({
+      data: {
+        items: [
+          {
+            record_id: 'rec_1',
+            fields: {
+              状态: '进行中',
+              负责人: 'Alice',
+              截止日期: '2099-01-01',
+            },
+          },
+          {
+            record_id: 'rec_2',
+            fields: {
+              状态: '阻塞',
+              负责人: '',
+              截止日期: '2000-01-01',
+            },
+          },
+          {
+            record_id: 'rec_3',
+            fields: {
+              状态: '已完成',
+              负责人: 'Bob',
+              截止日期: '2000-01-01',
+            },
+          },
+        ],
+        has_more: false,
+      },
+    });
+
+    const snapshot = await reader.readBitableSnapshot('app_1', 'tbl_1');
+
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        totalTasks: 3,
+        openTasks: 2,
+        blockedTasks: 1,
+        overdueTasks: 1,
+        unassignedTasks: 1,
+      }),
+    );
+    expect(snapshot?.recentRows).toHaveLength(3);
+  });
+});

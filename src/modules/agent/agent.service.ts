@@ -7,16 +7,21 @@ import { assertAgentRunTransition } from '../../common/state/state-machine';
 import { AGENT_RUN_QUEUE, ARTIFACT_SYNC_QUEUE } from '../../queues/queue.constants';
 import { GroupAgentSessionService } from './group-agent-session.service';
 import { SessionSubmitResult } from './group-agent-session.types';
-import { IntentMapperService } from './intent-mapper.service';
+import {
+  InteractiveGroupSubmitResult,
+  ManagerConfirmationPayload,
+  ManagerInteractiveDecision,
+} from './agent.types';
 import { PiMonoAdapter } from './pi-mono.adapter';
+import { ProjectRuntimeContextService } from './project-runtime-context.service';
 
 @Injectable()
 export class AgentService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly intentMapper: IntentMapperService,
     private readonly groupSessions: GroupAgentSessionService,
     private readonly piMono: PiMonoAdapter,
+    private readonly runtimeContext: ProjectRuntimeContextService,
     @InjectQueue(AGENT_RUN_QUEUE) private readonly agentRunQueue: Queue,
     @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactSyncQueue: Queue,
   ) {}
@@ -27,23 +32,150 @@ export class AgentService {
     messageSourceId?: string;
     prompt: string;
     intent?: string;
+    skillName?: string | null;
   }) {
     const project = await this.prisma.project.findUnique({ where: { id: input.projectId } });
     const environment = await this.prisma.projectEnvironment.findUnique({ where: { id: input.environmentId } });
     if (!project || !environment) throw new BadRequestException('Invalid project or environment');
-    const detected = input.intent ?? this.intentMapper.detect(input.prompt);
     const run = await this.prisma.agentRun.create({
       data: {
         projectId: project.id,
         environmentId: environment.id,
         messageSourceId: input.messageSourceId,
-        intent: detected,
-        skillName: this.intentMapper.skillFor(detected as any),
+        intent: input.intent ?? 'requirement_analysis',
+        skillName: input.skillName ?? null,
         prompt: input.prompt,
       },
     });
     await this.agentRunQueue.add('start', { agentRunId: run.id }, { jobId: run.id });
     return run;
+  }
+
+  async handleInteractiveGroupMessage(input: {
+    sessionId: string;
+    projectId: string;
+    environmentId: string;
+    feishuChatId: string;
+    messageSourceId?: string;
+    prompt: string;
+    senderOpenId?: string;
+    traceId?: string;
+  }): Promise<InteractiveGroupSubmitResult> {
+    const session = await this.prisma.groupAgentSession.findUnique({ where: { id: input.sessionId } });
+    if (!session) {
+      return { status: 'failed', reason: 'Group session not found' };
+    }
+
+    const project = await this.prisma.project.findUnique({ where: { id: input.projectId } });
+    const environment = await this.prisma.projectEnvironment.findUnique({ where: { id: input.environmentId } });
+    if (!project || !environment) {
+      return { status: 'failed', reason: 'Invalid project or environment' };
+    }
+
+    const lockToken = `run-lock:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+    const acquired = await this.groupSessions.tryAcquireLock(input.feishuChatId, lockToken);
+    if (!acquired) {
+      return {
+        status: 'rejected_busy',
+        reason: (await this.groupSessions.getBusyReason(input.feishuChatId)) ?? 'busy',
+      };
+    }
+
+    let retainLock = false;
+    try {
+      const projectContextBundle = await this.runtimeContext.assemble({
+        projectId: project.id,
+        environmentId: environment.id,
+        runtimeSessionKey: session.runtimeSessionKey,
+        sessionMode: session.sessionMode,
+        sessionStatus: this.runtimeContext.toSessionStatus(session.status),
+        memorySummary: session.memorySummary,
+      });
+
+      const decision = await this.piMono.runManagerDecision({
+        runtimeSessionKey: session.runtimeSessionKey,
+        sessionStoreRef: session.sessionStoreRef,
+        agentScopeKey: session.agentScopeKey,
+        sessionMode: session.sessionMode,
+        projectContextBundle,
+        project: { id: project.id, name: project.name, feishuChatId: project.feishuChatId },
+        environment: {
+          id: environment.id,
+          name: environment.name,
+          piMonoEnvId: environment.piMonoEnvId,
+          repoUrl: environment.repoUrl,
+          repoBranch: environment.repoBranch,
+          projectPath: environment.projectPath,
+          modelEndpoint: environment.modelEndpoint,
+          modelName: environment.modelName,
+          skillSet: environment.skillSet,
+        },
+        source: {
+          messageSourceId: input.messageSourceId,
+          senderOpenId: input.senderOpenId ?? null,
+          traceId: input.traceId ?? null,
+        },
+        prompt: this.buildInteractivePrompt(input.prompt, projectContextBundle.session.memorySummary ?? session.memorySummary ?? null),
+      });
+
+      await this.syncSessionSnapshot(session.id, session.runtimeSessionKey);
+
+      if (decision.action === 'ask_followup') {
+        return {
+          status: 'followup',
+          session: { id: session.id, runtimeSessionKey: session.runtimeSessionKey },
+          decision,
+          reply: decision.reply,
+        };
+      }
+
+      if (decision.action === 'request_confirmation') {
+        return {
+          status: 'confirmation_requested',
+          session: { id: session.id, runtimeSessionKey: session.runtimeSessionKey },
+          decision,
+          reply: decision.reply,
+          actionType: decision.intent,
+          confirmationPayload: this.toConfirmationPayload(input.prompt, decision),
+        };
+      }
+
+      const queued = await this.queueGroupExecution({
+        session,
+        project,
+        environment,
+        lockToken,
+        messageSourceId: input.messageSourceId,
+        prompt: this.buildExecutionPrompt(input.prompt, decision),
+        intent: decision.intent,
+        skillName: decision.skillHint ?? null,
+      });
+      if (queued.status !== 'accepted' || !queued.runId || !queued.lockToken) {
+        return {
+          status: 'failed',
+          reason: queued.status === 'failed' ? queued.reason : 'Failed to queue manager execution',
+        };
+      }
+
+      retainLock = true;
+      return {
+        status: 'accepted',
+        session: { id: session.id, runtimeSessionKey: session.runtimeSessionKey },
+        decision,
+        reply: decision.reply,
+        runId: queued.runId,
+        lockToken: queued.lockToken,
+      };
+    } catch (error) {
+      return {
+        status: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      if (!retainLock) {
+        await this.groupSessions.releaseLock(input.feishuChatId, lockToken);
+      }
+    }
   }
 
   async submitGroupMessage(input: {
@@ -54,6 +186,7 @@ export class AgentService {
     messageSourceId?: string;
     prompt: string;
     intent?: string;
+    skillName?: string | null;
   }): Promise<SessionSubmitResult> {
     const session = await this.prisma.groupAgentSession.findUnique({ where: { id: input.sessionId } });
     if (!session) {
@@ -77,28 +210,16 @@ export class AgentService {
     }
 
     try {
-      const detected = input.intent ?? this.intentMapper.detect(input.prompt);
-      const run = await this.prisma.agentRun.create({
-        data: {
-          projectId: project.id,
-          environmentId: environment.id,
-          messageSourceId: input.messageSourceId,
-          intent: detected,
-          skillName: this.intentMapper.skillFor(detected as any),
-          prompt: input.prompt,
-        },
-      });
-
-      await this.groupSessions.markRunQueued({
-        sessionId: session.id,
-        runId: run.id,
+      return this.queueGroupExecution({
+        session,
+        project,
+        environment,
         lockToken,
-        environmentId: environment.id,
+        messageSourceId: input.messageSourceId,
+        prompt: input.prompt,
+        intent: input.intent ?? 'requirement_analysis',
+        skillName: input.skillName ?? null,
       });
-
-      await this.agentRunQueue.add('start', { agentRunId: run.id }, { jobId: run.id });
-      const updatedSession = await this.prisma.groupAgentSession.findUniqueOrThrow({ where: { id: session.id } });
-      return { status: 'accepted', session: updatedSession, runId: run.id, lockToken };
     } catch (error) {
       await this.groupSessions.releaseLock(input.feishuChatId, lockToken);
       return {
@@ -164,5 +285,96 @@ export class AgentService {
     await this.findRun(id);
     await this.artifactSyncQueue.add('sync-run', { agentRunId: id });
     return { queued: true };
+  }
+
+  private async queueGroupExecution(input: {
+    session: { id: string };
+    project: { id: string };
+    environment: { id: string };
+    lockToken: string;
+    messageSourceId?: string;
+    prompt: string;
+    intent: string;
+    skillName?: string | null;
+  }): Promise<SessionSubmitResult> {
+    const run = await this.prisma.agentRun.create({
+      data: {
+        projectId: input.project.id,
+        environmentId: input.environment.id,
+        messageSourceId: input.messageSourceId,
+        intent: input.intent,
+        skillName: input.skillName ?? null,
+        prompt: input.prompt,
+      },
+    });
+
+    await this.groupSessions.markRunQueued({
+      sessionId: input.session.id,
+      runId: run.id,
+      lockToken: input.lockToken,
+      environmentId: input.environment.id,
+    });
+
+    await this.agentRunQueue.add('start', { agentRunId: run.id }, { jobId: run.id });
+    const updatedSession = await this.prisma.groupAgentSession.findUniqueOrThrow({ where: { id: input.session.id } });
+    return { status: 'accepted', session: updatedSession, runId: run.id, lockToken: input.lockToken };
+  }
+
+  private async syncSessionSnapshot(sessionId: string, runtimeSessionKey: string) {
+    const snapshot = this.piMono.getSessionSnapshot(runtimeSessionKey);
+    if (!snapshot) {
+      return;
+    }
+
+    await this.groupSessions.syncRuntimeSessionState({
+      sessionId,
+      piSessionId: snapshot.piSessionId,
+      sessionStoreDriver: snapshot.sessionStoreDriver,
+      sessionStoreRef: snapshot.sessionStoreRef ?? null,
+      memorySummary: snapshot.memorySummary ?? null,
+      lastError: null,
+      touchMessageAt: true,
+      touchRunAt: true,
+    });
+  }
+
+  private buildInteractivePrompt(rawText: string, memorySummary?: string | null) {
+    return [
+      'This is an interactive manager decision turn for a Feishu project workspace.',
+      'Decide whether to ask a follow-up question, request confirmation, or execute immediately.',
+      'If the request is ambiguous or missing key constraints, prefer ask_followup.',
+      memorySummary ? `Session memory summary: ${memorySummary}` : 'Session memory summary: none',
+      `Latest user message: ${rawText}`,
+    ].join('\n');
+  }
+
+  private buildExecutionPrompt(rawText: string, decision: ManagerInteractiveDecision) {
+    return [
+      'This is a manager-approved formal execution request.',
+      `Original user message: ${rawText}`,
+      `Execution intent: ${decision.intent}`,
+      `Execution goal: ${decision.executionGoal ?? decision.reply}`,
+      `Requested output mode: ${decision.outputMode ?? 'summary'}`,
+      decision.targetChannels?.length ? `Target channels: ${decision.targetChannels.join(', ')}` : 'Target channels: not specified',
+      `Execution request: ${decision.executionPrompt ?? rawText}`,
+    ].join('\n');
+  }
+
+  private toConfirmationPayload(rawText: string, decision: ManagerInteractiveDecision): ManagerConfirmationPayload {
+    return {
+      reply: decision.reply,
+      intent: decision.intent,
+      executionGoal: decision.executionGoal,
+      executionPrompt: decision.executionPrompt ?? this.buildExecutionPrompt(rawText, decision),
+      outputMode: decision.outputMode,
+      targetChannels: decision.targetChannels,
+      skillHint: decision.skillHint ?? null,
+      metadata: {
+        ...(decision.metadata ?? {}),
+        confirmationRequested: true,
+        decisionReason: decision.reason,
+        originalUserMessage: rawText,
+      },
+    };
   }
 }

@@ -6,6 +6,7 @@ import {
   GroupAgentSession,
   GroupSessionMode,
   GroupSessionStatus,
+  Prisma,
 } from '@prisma/client';
 import Redis from 'ioredis';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -17,6 +18,7 @@ import {
 } from './group-agent-session.types';
 import { GROUP_AGENT_SESSION_REDIS } from './agent.constants';
 import { PiMonoAdapter } from './pi-mono.adapter';
+import { SummaryPolicy } from './agent.types';
 
 type SessionState = {
   bootstrapDraft?: Record<string, string | undefined>;
@@ -55,6 +57,9 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
       if (context.sessionMode && existing.sessionMode !== context.sessionMode) {
         nextData.sessionMode = context.sessionMode;
       }
+      if (!this.hasSummaryPolicy(existing.summaryPolicyJson)) {
+        nextData.summaryPolicyJson = this.toSummaryPolicyJson(this.createDefaultSummaryPolicy());
+      }
       if (!Object.keys(nextData).length) return existing;
       return this.prisma.groupAgentSession.update({
         where: { id: existing.id },
@@ -72,6 +77,7 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
         sessionMode: context.sessionMode ?? (context.projectId ? GroupSessionMode.active : GroupSessionMode.bootstrap),
         status: GroupSessionStatus.idle,
         activeEnvironmentId: context.environmentId ?? null,
+        summaryPolicyJson: this.toSummaryPolicyJson(this.createDefaultSummaryPolicy()),
       },
     });
   }
@@ -263,6 +269,31 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
     return state.bootstrapDraft ?? {};
   }
 
+  getSummaryPolicy(session: Pick<GroupAgentSession, 'summaryPolicyJson'>): SummaryPolicy {
+    const value =
+      session.summaryPolicyJson && typeof session.summaryPolicyJson === 'object' && !Array.isArray(session.summaryPolicyJson)
+        ? (session.summaryPolicyJson as Record<string, unknown>)
+        : {};
+    const defaults = this.createDefaultSummaryPolicy();
+    return {
+      enabled: value.enabled === false ? false : defaults.enabled,
+      internalOnly: value.internalOnly === false ? false : defaults.internalOnly,
+      dailyStatus: value.dailyStatus === false ? false : defaults.dailyStatus,
+      weeklyDraft: value.weeklyDraft === false ? false : defaults.weeklyDraft,
+      timezone: typeof value.timezone === 'string' && value.timezone.trim() ? value.timezone : defaults.timezone,
+      dailyStatusChannel:
+        value.dailyStatusChannel === 'group_message' || value.dailyStatusChannel === 'internal_digest'
+          ? (value.dailyStatusChannel as SummaryPolicy['dailyStatusChannel'])
+          : defaults.dailyStatusChannel,
+      weeklyDraftChannel:
+        value.weeklyDraftChannel === 'group_message' ||
+        value.weeklyDraftChannel === 'internal_digest' ||
+        value.weeklyDraftChannel === 'feishu_doc'
+          ? (value.weeklyDraftChannel as SummaryPolicy['weeklyDraftChannel'])
+          : defaults.weeklyDraftChannel,
+    };
+  }
+
   async bindProjectSession(input: {
     sessionId?: string;
     feishuChatId: string;
@@ -300,6 +331,9 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
         status: GroupSessionStatus.idle,
         agentScopeKey: this.createAgentScopeKey(input.projectId, session.agentRole),
         lastError: null,
+        summaryPolicyJson: this.hasSummaryPolicy(session.summaryPolicyJson)
+          ? (session.summaryPolicyJson as Prisma.InputJsonValue)
+          : this.toSummaryPolicyJson(this.createDefaultSummaryPolicy()),
       },
     });
   }
@@ -408,5 +442,25 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
 
   private lockKey(chatId: string) {
     return `group-agent-lock:${chatId}`;
+  }
+
+  private createDefaultSummaryPolicy(): SummaryPolicy {
+    return {
+      enabled: true,
+      internalOnly: true,
+      dailyStatus: true,
+      weeklyDraft: true,
+      timezone: this.config.get<string>('DIGEST_TIMEZONE') ?? 'Asia/Shanghai',
+      dailyStatusChannel: 'internal_digest',
+      weeklyDraftChannel: 'internal_digest',
+    };
+  }
+
+  private hasSummaryPolicy(value: unknown) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length > 0);
+  }
+
+  private toSummaryPolicyJson(value: SummaryPolicy): Prisma.InputJsonValue {
+    return value as unknown as Prisma.InputJsonValue;
   }
 }

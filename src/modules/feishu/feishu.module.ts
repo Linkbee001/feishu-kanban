@@ -4,6 +4,7 @@ import { FeishuController } from './feishu.controller';
 import { FeishuService } from './feishu.service';
 import { FeishuEventService } from './feishu-event.service';
 import { FeishuWsService } from './feishu-ws.service';
+import { FeishuProjectReader } from './feishu-project-reader.service';
 import { FEISHU_EVENT_QUEUE } from '../../queues/queue.constants';
 import { AgentModule } from '../agent/agent.module';
 import { ConversationModule } from '../conversation/conversation.module';
@@ -21,7 +22,7 @@ import { ProjectModule } from '../project/project.module';
     forwardRef(() => ProjectModule),
   ],
   controllers: [FeishuController],
-  providers: [FeishuService, FeishuEventService, FeishuWsService],
-  exports: [FeishuService, FeishuEventService, FeishuWsService],
+  providers: [FeishuService, FeishuProjectReader, FeishuEventService, FeishuWsService],
+  exports: [FeishuService, FeishuProjectReader, FeishuEventService, FeishuWsService],
 })
 export class FeishuModule {}

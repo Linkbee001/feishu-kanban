@@ -35,6 +35,23 @@ describe('FeishuEventService', () => {
         status: 'accepted',
         runId: 'run_1',
       }),
+      handleInteractiveGroupMessage: jest.fn().mockResolvedValue({
+        status: 'accepted',
+        runId: 'run_1',
+        reply: '我会开始整理成正式文档。',
+        decision: {
+          action: 'execute',
+          confidence: 'high',
+          reason: 'The user explicitly asked for a document.',
+          reply: '我会开始整理成正式文档。',
+          intent: 'document_generate',
+        },
+        session: {
+          id: 'session_1',
+          runtimeSessionKey: 'chat:chat_1:manager',
+        },
+        lockToken: 'lock_1',
+      }),
     };
     const groupSessions = {
       getOrCreateSession: jest.fn().mockResolvedValue({
@@ -62,10 +79,6 @@ describe('FeishuEventService', () => {
         repoUrl: 'https://example.com/repo.git',
         repoBranch: 'main',
       }),
-    };
-    const intentMapper = {
-      detect: jest.fn().mockReturnValue('document_generate'),
-      requiresConfirmation: jest.fn().mockReturnValue(false),
     };
     const piMono = {
       runPrompt: jest.fn().mockResolvedValue([
@@ -113,7 +126,6 @@ describe('FeishuEventService', () => {
       agent as any,
       groupSessions as any,
       environments as any,
-      intentMapper as any,
       piMono as any,
       projects as any,
       conversations as any,
@@ -128,7 +140,6 @@ describe('FeishuEventService', () => {
       agent,
       groupSessions,
       environments,
-      intentMapper,
       piMono,
       projects,
       conversations,
@@ -235,7 +246,7 @@ describe('FeishuEventService', () => {
     expect(feishu.sendTextMessage).toHaveBeenCalledWith('chat_id', 'chat_1', expect.stringContaining('项目资源已初始化完成'));
   });
 
-  it('submits initialized group messages through the group session adapter path', async () => {
+  it('submits initialized group messages through the manager interaction path', async () => {
     const { service, prisma, feishu, agent, groupSessions } = createService();
     prisma.project.findUnique.mockResolvedValue({
       id: 'project_1',
@@ -253,15 +264,90 @@ describe('FeishuEventService', () => {
         sessionMode: 'active',
       }),
     );
-    expect(agent.submitGroupMessage).toHaveBeenCalledWith({
+    expect(agent.handleInteractiveGroupMessage).toHaveBeenCalledWith({
       sessionId: 'session_1',
       projectId: 'project_1',
       environmentId: 'env_1',
       feishuChatId: 'chat_1',
       messageSourceId: 'source_1',
       prompt: '帮我生成 PRD',
-      intent: 'document_generate',
+      senderOpenId: 'ou_sender',
+      traceId: expect.any(String),
     });
     expect(feishu.sendTextMessage).toHaveBeenCalledWith('chat_id', 'chat_1', expect.stringContaining('执行ID：run_1'));
+  });
+
+  it('sends a manager follow-up reply instead of creating a run when the request is ambiguous', async () => {
+    const { service, prisma, feishu, agent } = createService();
+    prisma.project.findUnique.mockResolvedValue({
+      id: 'project_1',
+      name: '支付项目',
+      feishuChatId: 'chat_1',
+    });
+    agent.handleInteractiveGroupMessage.mockResolvedValue({
+      status: 'followup',
+      reply: '你希望我输出成文档、任务还是只是口头总结？',
+      decision: {
+        action: 'ask_followup',
+        confidence: 'low',
+        reason: 'The user request does not specify the desired output.',
+        reply: '你希望我输出成文档、任务还是只是口头总结？',
+        intent: 'requirement_analysis',
+      },
+      session: {
+        id: 'session_1',
+        runtimeSessionKey: 'chat:chat_1:manager',
+      },
+    });
+
+    await service.handle(createPayload('先帮我看一下这个事情', 'group'));
+
+    expect(feishu.sendTextMessage).toHaveBeenCalledWith('chat_id', 'chat_1', '你希望我输出成文档、任务还是只是口头总结？');
+  });
+
+  it('creates a confirmation card from manager decision output', async () => {
+    const { service, prisma, confirmations, agent } = createService();
+    prisma.project.findUnique.mockResolvedValue({
+      id: 'project_1',
+      name: '支付项目',
+      feishuChatId: 'chat_1',
+    });
+
+    const payload = {
+      reply: '我建议先确认后再切环境。',
+      intent: 'environment_switch',
+      executionPrompt: '切换到 release 环境并说明影响。',
+      outputMode: 'summary',
+      targetChannels: ['group_message'],
+      metadata: { risk: 'medium' },
+    };
+
+    agent.handleInteractiveGroupMessage.mockResolvedValue({
+      status: 'confirmation_requested',
+      reply: payload.reply,
+      actionType: 'environment_switch',
+      confirmationPayload: payload,
+      decision: {
+        action: 'request_confirmation',
+        confidence: 'medium',
+        reason: 'Environment switches should be confirmed before execution.',
+        reply: payload.reply,
+        intent: 'environment_switch',
+      },
+      session: {
+        id: 'session_1',
+        runtimeSessionKey: 'chat:chat_1:manager',
+      },
+    });
+
+    await service.handle(createPayload('切到 release 环境', 'group'));
+
+    expect(confirmations.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: 'environment_switch',
+        payload,
+        summary: payload.reply,
+      }),
+    );
   });
 });
