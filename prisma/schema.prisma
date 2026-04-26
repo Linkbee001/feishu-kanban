@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProjectStatus {
+  initializing
+  active
+  paused
+  completed
+  closed
+}
+
+enum EnvironmentType {
+  default
+  temporary
+  module
+}
+
+enum EnvironmentStatus {
+  creating
+  active
+  disabled
+  error
+}
+
+enum RepoAccessMode {
+  readonly
+  write_protected
+}
+
+enum SourceType {
+  group
+  private
+}
+
+enum AgentRunStatus {
+  queued
+  running
+  syncing
+  succeeded
+  failed
+  canceled
+  timeout
+}
+
+enum ArtifactType {
+  document
+  task
+  file
+  execution_log
+  summary
+}
+
+enum ArtifactStatus {
+  pending
+  synced
+  failed
+  skipped
+}
+
+enum ConfirmationStatus {
+  pending
+  confirmed
+  rejected
+  expired
+}
+
+enum AgentRole {
+  manager
+}
+
+enum GroupSessionMode {
+  bootstrap
+  active
+  disabled
+}
+
+enum GroupSessionStatus {
+  idle
+  busy
+  error
+  disabled
+}
+
+model Project {
+  id                   String               @id @default(uuid()) @db.Uuid
+  name                 String
+  description          String?
+  ownerOpenId          String               @map("owner_open_id")
+  feishuChatId         String               @unique @map("feishu_chat_id")
+  status               ProjectStatus        @default(initializing)
+  docFolderToken       String?              @map("doc_folder_token")
+  bitableAppToken      String?              @map("bitable_app_token")
+  bitableTableId       String?              @map("bitable_table_id")
+  docChatTabId         String?              @map("doc_chat_tab_id")
+  bitableChatTabId     String?              @map("bitable_chat_tab_id")
+  defaultEnvironmentId String?              @map("default_environment_id") @db.Uuid
+  defaultSkillSet      Json                 @default("{}") @map("default_skill_set")
+  createdBy            String               @map("created_by")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+  environments         ProjectEnvironment[]
+  messageSources       MessageSource[]
+  agentRuns            AgentRun[]
+  artifacts            Artifact[]
+  confirmations        ConfirmationRequest[]
+  groupAgentSessions   GroupAgentSession[]
+
+  @@map("projects")
+}
+
+model ProjectEnvironment {
+  id             String            @id @default(uuid()) @db.Uuid
+  projectId      String            @map("project_id") @db.Uuid
+  name           String
+  type           EnvironmentType   @default(default)
+  piMonoEnvId    String?           @map("pi_mono_env_id")
+  repoUrl        String?           @map("repo_url")
+  repoBranch     String?           @map("repo_branch")
+  repoAccessMode RepoAccessMode    @default(readonly) @map("repo_access_mode")
+  projectPath    String?           @map("project_path")
+  modelEndpoint  String?           @map("model_endpoint")
+  modelName      String?           @map("model_name")
+  skillSet       Json              @default("{}") @map("skill_set")
+  outputDir      String?           @map("output_dir")
+  logUri         String?           @map("log_uri")
+  status         EnvironmentStatus @default(creating)
+  createdBy      String            @map("created_by")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  lastActiveAt   DateTime?         @map("last_active_at")
+  project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messageSources MessageSource[]
+  agentRuns      AgentRun[]
+  artifacts      Artifact[]
+  confirmations  ConfirmationRequest[]
+  groupAgentSessions GroupAgentSession[] @relation("GroupSessionEnvironment")
+
+  @@index([projectId])
+  @@map("project_environments")
+}
+
+model MessageSource {
+  id              String              @id @default(uuid()) @db.Uuid
+  projectId       String?             @map("project_id") @db.Uuid
+  environmentId   String?             @map("environment_id") @db.Uuid
+  sourceType      SourceType          @map("source_type")
+  feishuEventId   String              @map("feishu_event_id")
+  feishuChatId    String              @map("feishu_chat_id")
+  feishuMessageId String              @map("feishu_message_id")
+  senderOpenId    String              @map("sender_open_id")
+  rawText         String              @map("raw_text")
+  receivedAt      DateTime            @default(now()) @map("received_at")
+  traceId         String              @map("trace_id")
+  project         Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  environment     ProjectEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
+  agentRuns       AgentRun[]
+  artifacts       Artifact[]
+  confirmations   ConfirmationRequest[]
+
+  @@unique([feishuMessageId, senderOpenId])
+  @@index([feishuEventId])
+  @@map("message_sources")
+}
+
+model AgentRun {
+  id              String              @id @default(uuid()) @db.Uuid
+  projectId       String              @map("project_id") @db.Uuid
+  environmentId   String              @map("environment_id") @db.Uuid
+  messageSourceId String?             @map("message_source_id") @db.Uuid
+  piMonoRunId     String?             @map("pi_mono_run_id")
+  intent          String
+  skillName       String?             @map("skill_name")
+  prompt          String
+  status          AgentRunStatus      @default(queued)
+  progress        Int                 @default(0)
+  outputSummary   String?             @map("output_summary")
+  errorCode       String?             @map("error_code")
+  errorMessage    String?             @map("error_message")
+  rawOutputs      Json?               @map("raw_outputs")
+  startedAt       DateTime?           @map("started_at")
+  finishedAt      DateTime?           @map("finished_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  environment     ProjectEnvironment  @relation(fields: [environmentId], references: [id])
+  messageSource   MessageSource?      @relation(fields: [messageSourceId], references: [id], onDelete: SetNull)
+  artifacts       Artifact[]
+  currentInGroupSessions GroupAgentSession[] @relation("CurrentGroupRun")
+
+  @@index([status])
+  @@index([piMonoRunId])
+  @@map("agent_runs")
+}
+
+model Artifact {
+  id              String              @id @default(uuid()) @db.Uuid
+  projectId       String              @map("project_id") @db.Uuid
+  environmentId   String?             @map("environment_id") @db.Uuid
+  agentRunId      String?             @map("agent_run_id") @db.Uuid
+  messageSourceId String?             @map("message_source_id") @db.Uuid
+  type            ArtifactType
+  title           String
+  status          ArtifactStatus      @default(pending)
+  feishuUrl       String?             @map("feishu_url")
+  feishuToken     String?             @map("feishu_token")
+  bitableRecordId String?             @map("bitable_record_id")
+  fileKey         String?             @map("file_key")
+  contentHash     String?             @map("content_hash")
+  metadata        Json                @default("{}")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  environment     ProjectEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
+  agentRun        AgentRun?           @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  messageSource   MessageSource?      @relation(fields: [messageSourceId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, type, contentHash])
+  @@index([status])
+  @@map("artifacts")
+}
+
+model ConfirmationRequest {
+  id              String              @id @default(uuid()) @db.Uuid
+  projectId       String?             @map("project_id") @db.Uuid
+  environmentId   String?             @map("environment_id") @db.Uuid
+  messageSourceId String              @map("message_source_id") @db.Uuid
+  actionType      String              @map("action_type")
+  payload         Json
+  status          ConfirmationStatus  @default(pending)
+  cardMessageId   String?             @map("card_message_id")
+  confirmedBy     String?             @map("confirmed_by")
+  expiresAt       DateTime            @map("expires_at")
+  decidedAt       DateTime?           @map("decided_at")
+  project         Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  environment     ProjectEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
+  messageSource   MessageSource       @relation(fields: [messageSourceId], references: [id], onDelete: Cascade)
+
+  @@index([status, expiresAt])
+  @@map("confirmation_requests")
+}
+
+model ConversationContext {
+  id            String     @id @default(uuid()) @db.Uuid
+  sourceType    SourceType @map("source_type")
+  feishuChatId  String     @map("feishu_chat_id")
+  userOpenId    String?    @map("user_open_id")
+  projectId     String?    @map("project_id") @db.Uuid
+  environmentId String?    @map("environment_id") @db.Uuid
+  expiresAt     DateTime   @map("expires_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  @@unique([sourceType, feishuChatId, userOpenId])
+  @@index([expiresAt])
+  @@map("conversation_contexts")
+}
+
+model GroupAgentSession {
+  id                  String             @id @default(uuid()) @db.Uuid
+  projectId           String?            @map("project_id") @db.Uuid
+  feishuChatId        String             @map("feishu_chat_id")
+  agentRole           AgentRole          @default(manager) @map("agent_role")
+  agentScopeKey       String             @map("agent_scope_key")
+  runtimeSessionKey   String             @map("runtime_session_key")
+  sessionMode         GroupSessionMode   @default(bootstrap) @map("session_mode")
+  status              GroupSessionStatus @default(idle)
+  activeEnvironmentId String?            @map("active_environment_id") @db.Uuid
+  piSessionId         String?            @map("pi_session_id")
+  sessionStoreDriver  String?            @map("session_store_driver")
+  sessionStoreRef     String?            @map("session_store_ref")
+  currentAgentRunId   String?            @unique @map("current_agent_run_id") @db.Uuid
+  activeLockToken     String?            @map("active_lock_token")
+  memorySummary       String?            @map("memory_summary")
+  sessionState        Json               @default("{}") @map("session_state")
+  lastMessageAt       DateTime?          @map("last_message_at")
+  lastRunAt           DateTime?          @map("last_run_at")
+  lastError           String?            @map("last_error")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  project             Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  activeEnvironment   ProjectEnvironment? @relation("GroupSessionEnvironment", fields: [activeEnvironmentId], references: [id], onDelete: SetNull)
+  currentAgentRun     AgentRun?          @relation("CurrentGroupRun", fields: [currentAgentRunId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, agentRole])
+  @@unique([feishuChatId, agentRole])
+  @@index([status, feishuChatId])
+  @@map("group_agent_sessions")
+}
+
+model FeishuEventDedup {
+  eventId   String   @id @map("event_id")
+  messageId String?  @map("message_id")
+  handledAt DateTime @default(now()) @map("handled_at")
+  traceId   String   @map("trace_id")
+
+  @@map("feishu_event_dedup")
+}

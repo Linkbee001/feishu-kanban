@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+.git
+.env
+.pi-agent
+npm-debug.log*
+Dockerfile
+docker-compose.yml
