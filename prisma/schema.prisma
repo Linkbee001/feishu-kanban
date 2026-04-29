@@ -55,6 +55,13 @@ enum AgentRunStatus {
   timeout
 }
 
+enum AgentRunType {
+  formal_execution
+  runtime_audit
+  bootstrap
+  digest
+}
+
 enum ArtifactType {
   document
   task
@@ -104,6 +111,14 @@ enum GroupRuntimeTaskStatus {
   canceled
 }
 
+enum RuntimeQueueMode {
+  steer
+  followup
+  collect
+  interrupt
+  steer_backlog
+}
+
 model Project {
   id                   String               @id @default(uuid()) @db.Uuid
   name                 String
@@ -131,6 +146,7 @@ model Project {
   agentProfileOverrides ProjectAgentProfileOverride[]
   groupPolicies        GroupPolicy[]
   memberProfiles       ProjectMemberProfile[]
+  runtimeEvents        RuntimeEvent[]
 
   @@map("projects")
 }
@@ -168,6 +184,7 @@ model ProjectEnvironment {
   groupAgentSessions GroupAgentSession[] @relation("GroupSessionEnvironment")
   runtimeTasks   GroupRuntimeTask[]
   groupPolicies  GroupPolicy[]
+  runtimeEvents  RuntimeEvent[]
 
   @@index([projectId])
   @@map("project_environments")
@@ -207,6 +224,7 @@ model AgentRun {
   messageSourceId String?             @map("message_source_id") @db.Uuid
   groupRuntimeTaskId String?          @map("group_runtime_task_id") @db.Uuid
   piMonoRunId     String?             @map("pi_mono_run_id")
+  runType         AgentRunType        @default(formal_execution) @map("run_type")
   intent          String
   skillName       String?             @map("skill_name")
   prompt          String
@@ -331,6 +349,7 @@ model GroupAgentSession {
   currentAgentRun     AgentRun?          @relation("CurrentGroupRun", fields: [currentAgentRunId], references: [id], onDelete: SetNull)
   currentRuntimeTask  GroupRuntimeTask?  @relation("CurrentRuntimeTask", fields: [currentRuntimeTaskId], references: [id], onDelete: SetNull)
   runtimeTasks        GroupRuntimeTask[]
+  runtimeEvents       RuntimeEvent[]
 
   @@unique([projectId, agentRole])
   @@unique([feishuChatId, agentRole])
@@ -391,6 +410,7 @@ model GroupPolicy {
   feishuChatId                      String              @map("feishu_chat_id")
   enabled                           Boolean             @default(true)
   mentionOnly                       Boolean             @default(true) @map("mention_only")
+  defaultQueueMode                  RuntimeQueueMode    @default(collect) @map("default_queue_mode")
   allowedSkillsJson                 Json                @default("[]") @map("allowed_skills_json")
   defaultEnvironmentId              String?             @map("default_environment_id") @db.Uuid
   allowAutoTaskCreation             Boolean             @default(true) @map("allow_auto_task_creation")
@@ -406,6 +426,26 @@ model GroupPolicy {
   @@unique([projectId, feishuChatId])
   @@index([feishuChatId])
   @@map("group_policies")
+}
+
+model RuntimeEvent {
+  id                String              @id @default(uuid()) @db.Uuid
+  runtimeSessionKey String              @map("runtime_session_key")
+  groupSessionId    String?             @map("group_session_id") @db.Uuid
+  projectId         String?             @map("project_id") @db.Uuid
+  environmentId     String?             @map("environment_id") @db.Uuid
+  sequence          Int
+  eventType         String              @map("event_type")
+  payload           Json                @default("{}")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  groupSession      GroupAgentSession?  @relation(fields: [groupSessionId], references: [id], onDelete: SetNull)
+  project           Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  environment       ProjectEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
+
+  @@unique([runtimeSessionKey, sequence])
+  @@index([groupSessionId, createdAt])
+  @@index([projectId, createdAt])
+  @@map("runtime_events")
 }
 
 model ProjectMemberProfile {

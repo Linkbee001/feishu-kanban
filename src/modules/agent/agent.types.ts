@@ -31,10 +31,28 @@ export type GroupRuntimeTaskStatus =
   | 'failed'
   | 'canceled';
 export type GroupRuntimeToolActionType = 'create' | 'update' | 'start' | 'complete' | 'fail' | 'cancel' | 'block';
+export type RuntimeQueueMode = 'steer' | 'followup' | 'collect' | 'interrupt' | 'steer_backlog';
+export type AgentRunType = 'formal_execution' | 'runtime_audit' | 'bootstrap' | 'digest';
+export type RuntimeEventType =
+  | 'message_submitted'
+  | 'message_queued'
+  | 'message_collected'
+  | 'message_steered'
+  | 'message_interrupted'
+  | 'turn_started'
+  | 'turn_completed'
+  | 'turn_failed'
+  | 'todo_changed'
+  | 'reply_emitted'
+  | 'outputs_emitted'
+  | 'confirmation_requested'
+  | 'session_waiting'
+  | 'session_resumed';
 
 export interface GroupPolicySnapshot {
   enabled: boolean;
   mentionOnly: boolean;
+  defaultQueueMode: RuntimeQueueMode;
   allowedSkills: string[];
   defaultEnvironmentId?: string | null;
   allowAutoTaskCreation: boolean;
@@ -232,6 +250,92 @@ export interface GroupRuntimeTaskSnapshot {
   lastError?: string | null;
 }
 
+export interface RuntimeMinimalContext {
+  sessionMemorySummary?: string | null;
+  repoReady?: boolean;
+  repoHeadRef?: string | null;
+}
+
+export interface RuntimeContextBinding {
+  projectId: string;
+  environmentId: string;
+  feishuChatId: string;
+  groupSessionId?: string | null;
+}
+
+export interface RuntimeEvent {
+  sequence: number;
+  at: string;
+  type: RuntimeEventType;
+  payload: Record<string, unknown>;
+}
+
+export interface RuntimeQueueItemSnapshot {
+  queueItemId: string;
+  messageSourceId?: string;
+  mode: RuntimeQueueMode;
+  summary: string;
+  enqueuedAt: string;
+}
+
+export interface RuntimeStateSnapshot {
+  runtimeSessionKey: string;
+  piSessionId?: string;
+  status: 'idle' | 'running' | 'queued' | 'waiting_confirmation' | 'compacting' | 'aborting' | 'failed';
+  currentTurn?: {
+    turnId: string;
+    mode: 'decision' | 'outputs' | 'group_runtime';
+    messageSourceId?: string;
+    startedAt: string;
+  };
+  queue: RuntimeQueueItemSnapshot[];
+  waitingReason?: string;
+  isStreaming: boolean;
+  isCompacting: boolean;
+  memorySummary?: string;
+}
+
+export interface RuntimeSubmitMessageInput {
+  runtimeSessionKey: string;
+  envelope: {
+    messageSourceId: string;
+    sourceType: 'group' | 'dm' | 'system';
+    senderOpenId?: string | null;
+    feishuChatId?: string | null;
+    feishuMessageId?: string | null;
+    traceId?: string | null;
+    rawText: string;
+    metadata?: Record<string, unknown>;
+  };
+  queueMode?: RuntimeQueueMode;
+  environment: PiMonoCreateRunRequest['environment'];
+  project: PiMonoCreateRunRequest['project'];
+  roleProfile?: CompiledRoleProfile;
+  minimalContext?: RuntimeMinimalContext;
+  contextBinding: RuntimeContextBinding;
+}
+
+export interface RuntimeResumeInput {
+  runtimeSessionKey: string;
+  event: {
+    type: 'confirmation_resolved' | 'system_followup';
+    payload: Record<string, unknown>;
+    text?: string;
+  };
+  environment: PiMonoCreateRunRequest['environment'];
+  project: PiMonoCreateRunRequest['project'];
+  roleProfile?: CompiledRoleProfile;
+  minimalContext?: RuntimeMinimalContext;
+  contextBinding: RuntimeContextBinding;
+}
+
+export interface RuntimeSubmitResult {
+  accepted: boolean;
+  action: 'run_now' | 'steered' | 'queued' | 'collected' | 'dropped' | 'interrupted';
+  runtimeSessionKey: string;
+  activeTurnId?: string;
+}
+
 export interface GroupRuntimeTodoWriteAction {
   type: 'todo_write';
   action: GroupRuntimeToolActionType;
@@ -320,6 +424,8 @@ export interface PiMonoCreateRunRequest {
   requestKind?: 'bootstrap' | 'interactive_decision' | 'formal_execution' | 'group_runtime';
   wakeMode?: AgentWakeMode;
   digestType?: DigestType | null;
+  minimalContext?: RuntimeMinimalContext;
+  contextBinding?: RuntimeContextBinding;
   projectContextBundle?: ProjectContextBundle;
   roleProfile?: CompiledRoleProfile;
   runtimeTasks?: GroupRuntimeTaskSnapshot[];

@@ -32,17 +32,19 @@ export class GroupPolicyService {
         feishuChatId: input.feishuChatId,
         enabled: true,
         mentionOnly: true,
+        defaultQueueMode: 'collect',
         allowedSkillsJson: skills as Prisma.InputJsonValue,
         defaultEnvironmentId: input.defaultEnvironmentId ?? null,
         allowAutoTaskCreation: true,
         allowTaskBoardWrite: true,
         allowDocWrite: true,
         highRiskActionsRequireConfirmation: true,
-      },
+      } as any,
       update: {
         defaultEnvironmentId: input.defaultEnvironmentId ?? null,
+        defaultQueueMode: 'collect',
         allowedSkillsJson: skills as Prisma.InputJsonValue,
-      },
+      } as any,
     });
   }
 
@@ -61,6 +63,7 @@ export class GroupPolicyService {
   async updateByChat(feishuChatId: string, input: {
     enabled?: boolean;
     mentionOnly?: boolean;
+    defaultQueueMode?: 'steer' | 'followup' | 'collect' | 'interrupt' | 'steer_backlog';
     allowedSkills?: string[];
     defaultEnvironmentId?: string | null;
     allowAutoTaskCreation?: boolean;
@@ -75,6 +78,7 @@ export class GroupPolicyService {
       data: {
         ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
         ...(input.mentionOnly !== undefined ? { mentionOnly: input.mentionOnly } : {}),
+        ...(input.defaultQueueMode !== undefined ? { defaultQueueMode: input.defaultQueueMode } : {}),
         ...(input.allowedSkills !== undefined
           ? { allowedSkillsJson: input.allowedSkills.map((item) => item.trim()).filter(Boolean) as Prisma.InputJsonValue }
           : {}),
@@ -129,6 +133,7 @@ export class GroupPolicyService {
     return {
       enabled: policy.enabled,
       mentionOnly: policy.mentionOnly,
+      defaultQueueMode: (policy as any).defaultQueueMode ?? 'collect',
       allowedSkills: Array.isArray(policy.allowedSkillsJson)
         ? policy.allowedSkillsJson.map((item) => String(item))
         : [],

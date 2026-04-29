@@ -44,6 +44,29 @@ describe('PiMonoAdapter', () => {
       artifact: {
         findMany: jest.fn().mockResolvedValue([]),
       },
+      runtimeEvent: {
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn().mockResolvedValue(undefined),
+      },
+      project: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          id: 'project_1',
+          docFolderToken: 'folder_1',
+          bitableAppToken: 'bitable_app_1',
+          bitableTableId: 'table_1',
+        }),
+      },
+      groupRuntimeTask: {
+        findMany: jest.fn().mockResolvedValue([]),
+        upsert: jest.fn().mockResolvedValue(undefined),
+      },
+      confirmationRequest: {
+        create: jest.fn().mockResolvedValue({ id: 'confirm_1' }),
+        update: jest.fn().mockResolvedValue(undefined),
+      },
+      agentRun: {
+        create: jest.fn().mockResolvedValue({ id: 'run_1' }),
+      },
     };
   }
 
@@ -53,6 +76,19 @@ describe('PiMonoAdapter', () => {
       readProjectDocument: jest.fn(),
       searchProjectDocuments: jest.fn(),
       readBitableSnapshot: jest.fn(),
+    };
+  }
+
+  function createFeishu() {
+    return {
+      sendTextMessage: jest.fn().mockResolvedValue(undefined),
+      sendCard: jest.fn().mockResolvedValue({ data: { message_id: 'card_1' } }),
+    };
+  }
+
+  function createArtifactQueue() {
+    return {
+      add: jest.fn().mockResolvedValue(undefined),
     };
   }
 
@@ -67,7 +103,14 @@ describe('PiMonoAdapter', () => {
   it('stores SDK session metadata after creating a new runtime session', async () => {
     const config = createConfig();
     const redis = createRedis();
-    const adapter = new PiMonoAdapter(config as any, createPrisma() as any, createFeishuReader() as any, redis as any);
+    const adapter = new PiMonoAdapter(
+      config as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      redis as any,
+      createArtifactQueue() as any,
+    );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\new-session.jsonl'),
     };
@@ -152,7 +195,14 @@ describe('PiMonoAdapter', () => {
 
     const config = createConfig();
     const redis = createRedis();
-    const adapter = new PiMonoAdapter(config as any, createPrisma() as any, createFeishuReader() as any, redis as any);
+    const adapter = new PiMonoAdapter(
+      config as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      redis as any,
+      createArtifactQueue() as any,
+    );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue(storeRef),
     };
@@ -206,8 +256,10 @@ describe('PiMonoAdapter', () => {
     const adapter = new PiMonoAdapter(
       createConfig() as any,
       createPrisma() as any,
+      createFeishu() as any,
       createFeishuReader() as any,
       createRedis() as any,
+      createArtifactQueue() as any,
     );
 
     const cwd = (adapter as any).resolveCwd({
@@ -222,7 +274,14 @@ describe('PiMonoAdapter', () => {
   it('captures group runtime actions and injects virtual role context files', async () => {
     const config = createConfig();
     const redis = createRedis();
-    const adapter = new PiMonoAdapter(config as any, createPrisma() as any, createFeishuReader() as any, redis as any);
+    const adapter = new PiMonoAdapter(
+      config as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      redis as any,
+      createArtifactQueue() as any,
+    );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\group-runtime.jsonl'),
     };
@@ -379,5 +438,241 @@ describe('PiMonoAdapter', () => {
         content: '# AGENTS\nsmoke profile',
       },
     ]);
+  });
+
+  it('starts a runtime turn and records runtime events for idle submitMessage', async () => {
+    const config = createConfig();
+    const redis = createRedis();
+    const prisma = createPrisma();
+    const adapter = new PiMonoAdapter(
+      config as any,
+      prisma as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      redis as any,
+      createArtifactQueue() as any,
+    );
+    const fakeSessionManager = {
+      getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\runtime-submit.jsonl'),
+    };
+    let emitTool: any;
+    const fakeSession = {
+      isStreaming: false,
+      isCompacting: false,
+      prompt: jest.fn(async () => {
+        fakeSession.isStreaming = true;
+        await emitTool.execute('tool-1', {
+          outputs: [{ type: 'summary', title: 'runtime-summary', content: 'done' }],
+        });
+        fakeSession.isStreaming = false;
+      }),
+      steer: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      getLastAssistantText: jest.fn().mockReturnValue('runtime submit summary'),
+      abort: jest.fn().mockResolvedValue(undefined),
+      dispose: jest.fn(),
+      sessionId: 'pi_runtime_submit_1',
+    };
+    const fakeSdk = {
+      AuthStorage: {
+        create: jest.fn().mockReturnValue({}),
+      },
+      ModelRegistry: {
+        create: jest.fn().mockReturnValue(createModelRegistry()),
+      },
+      SessionManager: {
+        create: jest.fn().mockReturnValue(fakeSessionManager),
+        open: jest.fn(),
+      },
+      createAgentSession: jest.fn(async (options: any) => {
+        emitTool = options.customTools.find((tool: any) => tool.name === 'emit_outputs');
+        return { session: fakeSession };
+      }),
+    };
+
+    (adapter as any).loadSdk = jest.fn().mockResolvedValue(fakeSdk);
+    (adapter as any).ensureCustomModelsConfig = jest.fn();
+
+    const result = await adapter.submitMessage({
+      runtimeSessionKey: 'chat:chat_submit:manager',
+      contextBinding: {
+        groupSessionId: 'session_1',
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        feishuChatId: 'chat_submit',
+      },
+      project: {
+        id: 'project_1',
+        name: 'Payments',
+        feishuChatId: 'chat_submit',
+      },
+      environment: {
+        id: 'env_1',
+        name: 'Default',
+        projectPath: process.cwd(),
+        repoSyncStatus: 'ready',
+        repoHeadRef: 'abc123',
+      },
+      minimalContext: {
+        sessionMemorySummary: 'memory summary',
+        repoReady: true,
+        repoHeadRef: 'abc123',
+      },
+      envelope: {
+        messageSourceId: 'source_1',
+        sourceType: 'group',
+        senderOpenId: 'ou_sender',
+        feishuChatId: 'chat_submit',
+        rawText: 'Please summarize the latest progress.',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        action: 'run_now',
+      }),
+    );
+    expect((prisma.runtimeEvent.create as jest.Mock).mock.calls.map((call) => call[0].data.eventType)).toEqual(
+      expect.arrayContaining(['message_submitted', 'turn_started', 'outputs_emitted', 'turn_completed']),
+    );
+    expect(adapter.getRuntimeState('chat:chat_submit:manager')).toEqual(
+      expect.objectContaining({
+        status: 'idle',
+      }),
+    );
+  });
+
+  it('collects a second message while the runtime session is streaming', async () => {
+    const config = createConfig();
+    const redis = createRedis();
+    const prisma = createPrisma();
+    const adapter = new PiMonoAdapter(
+      config as any,
+      prisma as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      redis as any,
+      createArtifactQueue() as any,
+    );
+    const fakeSessionManager = {
+      getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\runtime-collect.jsonl'),
+    };
+    let emitTool: any;
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const fakeSession = {
+      isStreaming: false,
+      isCompacting: false,
+      prompt: jest.fn(async () => {
+        fakeSession.isStreaming = true;
+        await promptGate;
+        await emitTool.execute('tool-1', {
+          outputs: [{ type: 'summary', title: 'runtime-summary', content: 'done' }],
+        });
+        fakeSession.isStreaming = false;
+      }),
+      steer: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      getLastAssistantText: jest.fn().mockReturnValue('runtime collect summary'),
+      abort: jest.fn().mockResolvedValue(undefined),
+      dispose: jest.fn(),
+      sessionId: 'pi_runtime_collect_1',
+    };
+    const fakeSdk = {
+      AuthStorage: {
+        create: jest.fn().mockReturnValue({}),
+      },
+      ModelRegistry: {
+        create: jest.fn().mockReturnValue(createModelRegistry()),
+      },
+      SessionManager: {
+        create: jest.fn().mockReturnValue(fakeSessionManager),
+        open: jest.fn(),
+      },
+      createAgentSession: jest.fn(async (options: any) => {
+        emitTool = options.customTools.find((tool: any) => tool.name === 'emit_outputs');
+        return { session: fakeSession };
+      }),
+    };
+
+    (adapter as any).loadSdk = jest.fn().mockResolvedValue(fakeSdk);
+    (adapter as any).ensureCustomModelsConfig = jest.fn();
+
+    const first = adapter.submitMessage({
+      runtimeSessionKey: 'chat:chat_collect:manager',
+      contextBinding: {
+        groupSessionId: 'session_1',
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        feishuChatId: 'chat_collect',
+      },
+      project: {
+        id: 'project_1',
+        name: 'Payments',
+        feishuChatId: 'chat_collect',
+      },
+      environment: {
+        id: 'env_1',
+        name: 'Default',
+        projectPath: process.cwd(),
+        repoSyncStatus: 'ready',
+      },
+      envelope: {
+        messageSourceId: 'source_1',
+        sourceType: 'group',
+        senderOpenId: 'ou_sender',
+        feishuChatId: 'chat_collect',
+        rawText: 'First message',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const second = await adapter.submitMessage({
+      runtimeSessionKey: 'chat:chat_collect:manager',
+      contextBinding: {
+        groupSessionId: 'session_1',
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        feishuChatId: 'chat_collect',
+      },
+      project: {
+        id: 'project_1',
+        name: 'Payments',
+        feishuChatId: 'chat_collect',
+      },
+      environment: {
+        id: 'env_1',
+        name: 'Default',
+        projectPath: process.cwd(),
+        repoSyncStatus: 'ready',
+      },
+      envelope: {
+        messageSourceId: 'source_2',
+        sourceType: 'group',
+        senderOpenId: 'ou_sender',
+        feishuChatId: 'chat_collect',
+        rawText: 'Second message',
+      },
+    });
+
+    releasePrompt();
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(second).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        action: 'collected',
+      }),
+    );
+    expect((prisma.runtimeEvent.create as jest.Mock).mock.calls.map((call) => call[0].data.eventType)).toEqual(
+      expect.arrayContaining(['message_collected']),
+    );
   });
 });

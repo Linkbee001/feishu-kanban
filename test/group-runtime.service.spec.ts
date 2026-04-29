@@ -33,29 +33,6 @@ describe('GroupRuntimeService', () => {
       name: 'Payments',
       feishuChatId: 'chat_1',
     };
-    const projectContextBundle = {
-      project: {
-        id: 'project_1',
-        name: 'Payments',
-        feishuChatId: 'chat_1',
-      },
-      environment: {
-        id: 'env_1',
-        name: 'Default',
-      },
-      session: {
-        runtimeSessionKey: 'chat:chat_1:manager',
-        sessionMode: 'active',
-        status: 'idle',
-      },
-      recentMessages: [],
-      recentRuns: [],
-      recentArtifacts: [],
-      folderEntries: [],
-      folderEntriesTruncated: false,
-      docSnapshots: [],
-      bitableSnapshot: null,
-    };
     const roleProfile = {
       agentRole: 'manager',
       agentsMd: 'agents',
@@ -70,25 +47,46 @@ describe('GroupRuntimeService', () => {
       projectEnvironment: {
         findUniqueOrThrow: jest.fn().mockResolvedValue(environment),
       },
-      groupAgentSession: {
-        findUniqueOrThrow: jest.fn().mockResolvedValue(session),
-      },
       project: {
         findUniqueOrThrow: jest.fn().mockResolvedValue(project),
       },
-      agentRun: {
-        create: jest.fn().mockResolvedValue({ id: 'run_1' }),
+      groupPolicy: {
+        findFirst: jest.fn().mockResolvedValue({
+          defaultQueueMode: 'collect',
+        }),
       },
       confirmationRequest: {
         findUnique: jest.fn(),
       },
+      groupAgentSession: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
     };
     const piMono = {
-      runGroupRuntimeTurn: jest.fn(),
+      submitMessage: jest.fn().mockResolvedValue({
+        accepted: true,
+        action: 'run_now',
+        runtimeSessionKey: 'chat:chat_1:manager',
+        activeTurnId: 'turn_1',
+      }),
+      resumeSession: jest.fn().mockResolvedValue({ accepted: true }),
+      getSessionSnapshot: jest.fn().mockReturnValue({
+        runtimeSessionKey: 'chat:chat_1:manager',
+        piSessionId: 'pi_session_1',
+        sessionStoreDriver: 'local_file',
+        sessionStoreRef: 'C:\\sessions\\chat_1.jsonl',
+        memorySummary: 'updated summary',
+      }),
+      getRuntimeState: jest.fn().mockReturnValue({
+        runtimeSessionKey: 'chat:chat_1:manager',
+        status: 'running',
+        queue: [],
+        isStreaming: true,
+        isCompacting: false,
+      }),
+      pullRuntimeEvents: jest.fn().mockReturnValue([]),
     };
     const groupSessions = {
-      tryAcquireLock: jest.fn().mockResolvedValue(true),
-      releaseLock: jest.fn().mockResolvedValue(undefined),
       getOrCreateSession: jest.fn().mockResolvedValue(session),
       syncRuntimeSessionState: jest.fn().mockResolvedValue(undefined),
       syncGroupRuntimeState: jest.fn().mockResolvedValue(undefined),
@@ -96,39 +94,23 @@ describe('GroupRuntimeService', () => {
     const repoSync = {
       maybeRefreshForInteractive: jest.fn().mockResolvedValue(undefined),
     };
-    const runtimeContext = {
-      assemble: jest.fn().mockResolvedValue(projectContextBundle),
-      toSessionStatus: jest.fn().mockReturnValue('idle'),
-    };
     const roleProfiles = {
       compile: jest.fn().mockResolvedValue(roleProfile),
     };
     const runtimeTasks = {
-      listForSession: jest.fn(),
-      applyAction: jest.fn().mockResolvedValue(undefined),
-      attachConfirmation: jest.fn().mockResolvedValue(undefined),
-      releaseBlockedTask: jest.fn().mockResolvedValue(undefined),
+      listForSession: jest.fn().mockResolvedValue([]),
     };
-    const feishu = {
-      sendTextMessage: jest.fn().mockResolvedValue(undefined),
-    };
-    const confirmations = {
-      create: jest.fn().mockResolvedValue({ id: 'confirm_1' }),
-    };
-    const artifactQueue = {
-      add: jest.fn().mockResolvedValue(undefined),
-    };
+    const feishu = {};
+    const artifactQueue = {};
 
     const service = new GroupRuntimeService(
       prisma as any,
       piMono as any,
       groupSessions as any,
       repoSync as any,
-      runtimeContext as any,
       roleProfiles as any,
       runtimeTasks as any,
       feishu as any,
-      confirmations as any,
       artifactQueue as any,
     );
 
@@ -138,192 +120,78 @@ describe('GroupRuntimeService', () => {
       piMono,
       groupSessions,
       repoSync,
-      runtimeContext,
       roleProfiles,
-      runtimeTasks,
-      feishu,
-      confirmations,
-      artifactQueue,
       session,
     };
   };
 
-  it('processes a group runtime turn, persists todo actions, and emits an audit run', async () => {
-    const { service, piMono, runtimeTasks, feishu, artifactQueue, prisma, groupSessions } = createService();
-
-    runtimeTasks.listForSession
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: 'task_1',
-          title: 'smoke task',
-          description: 'Check runtime flow',
-          intent: 'progress_summary',
-          skillHint: null,
-          outputMode: 'summary',
-          orderIndex: 1,
-          status: 'completed',
-          taskPayloadJson: null,
-          resultSummary: 'Done',
-          lastError: null,
-        },
-      ]);
-
-    piMono.runGroupRuntimeTurn.mockResolvedValue({
-      status: 'succeeded',
-      actions: [
-        {
-          type: 'reply_group',
-          text: 'SMOKE_CREATE_TASK_ACK',
-        },
-        {
-          type: 'todo_write',
-          action: 'create',
-          title: 'smoke task',
-          description: 'Check runtime flow',
-          intent: 'progress_summary',
-          outputMode: 'summary',
-        },
-        {
-          type: 'todo_write',
-          action: 'start',
-          taskId: 'task_1',
-          resultSummary: 'Started',
-        },
-        {
-          type: 'todo_write',
-          action: 'complete',
-          taskId: 'task_1',
-          resultSummary: 'Done',
-        },
-      ],
-      outputs: [{ type: 'summary', title: 'smoke-summary', content: 'SMOKE_CREATE_TASK_DONE' }],
-      session: {
-        runtimeSessionKey: 'chat:chat_1:manager',
-        piSessionId: 'pi_session_1',
-        sessionStoreDriver: 'local_file',
-        sessionStoreRef: 'C:\\sessions\\chat_1.jsonl',
-        memorySummary: 'updated summary',
-      },
-    });
+  it('submits a group message into the runtime orchestrator', async () => {
+    const { service, piMono, groupSessions } = createService();
 
     const result = await service.handleMentionMessage({
       projectId: 'project_1',
       environmentId: 'env_1',
       feishuChatId: 'chat_1',
       messageSourceId: 'source_1',
+      feishuMessageId: 'msg_1',
       prompt: '[SMOKE_CREATE_TASK]',
       senderOpenId: 'ou_sender',
       traceId: 'trace_1',
     });
 
-    expect(result).toEqual({ status: 'completed', passes: 1 });
-    expect(piMono.runGroupRuntimeTurn).toHaveBeenCalledWith(
+    expect(result).toEqual({
+      status: 'run_now',
+      runtimeSessionKey: 'chat:chat_1:manager',
+      activeTurnId: 'turn_1',
+    });
+    expect(piMono.submitMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         runtimeSessionKey: 'chat:chat_1:manager',
-        prompt: '[SMOKE_CREATE_TASK]',
-      }),
-    );
-    expect(runtimeTasks.applyAction).toHaveBeenCalledTimes(3);
-    expect(feishu.sendTextMessage).toHaveBeenCalledWith('chat_id', 'chat_1', 'SMOKE_CREATE_TASK_ACK');
-    expect(prisma.agentRun.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          projectId: 'project_1',
-          environmentId: 'env_1',
-          groupRuntimeTaskId: 'task_1',
-          status: 'syncing',
+        queueMode: 'collect',
+        envelope: expect.objectContaining({
+          messageSourceId: 'source_1',
+          rawText: '[SMOKE_CREATE_TASK]',
+          sourceType: 'group',
         }),
       }),
     );
-    expect(artifactQueue.add).toHaveBeenCalledWith('sync-run', { agentRunId: 'run_1' }, { jobId: 'run_1-sync' });
-    expect(groupSessions.syncGroupRuntimeState).toHaveBeenCalledWith(
+    expect(groupSessions.syncRuntimeSessionState).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'session_1',
-        currentRuntimeTaskId: null,
-        touchRuntimeTurnAt: true,
+        piSessionId: 'pi_session_1',
       }),
     );
   });
 
-  it('creates a confirmation request and pauses the runtime when the turn blocks on approval', async () => {
-    const { service, piMono, runtimeTasks, confirmations, groupSessions } = createService();
+  it('resumes a waiting runtime session from confirmation', async () => {
+    const { service, piMono, prisma } = createService();
 
-    runtimeTasks.listForSession
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: 'task_1',
-          title: 'smoke confirm task',
-          description: 'Need approval',
-          intent: 'document_generate',
-          skillHint: null,
-          outputMode: 'summary',
-          orderIndex: 1,
-          status: 'waiting_confirmation',
-          taskPayloadJson: null,
-          resultSummary: 'Waiting for confirmation',
-          lastError: null,
-        },
-      ]);
-
-    piMono.runGroupRuntimeTurn.mockResolvedValue({
-      status: 'succeeded',
-      actions: [
-        {
-          type: 'todo_write',
-          action: 'start',
-          taskId: 'task_1',
-          resultSummary: 'Started',
-        },
-        {
-          type: 'request_group_confirmation',
-          taskId: 'task_1',
-          actionType: 'document_publish',
-          summary: 'Need approval',
-          detail: 'Please approve the smoke flow',
-          payload: {
-            reply: 'Need approval',
-            intent: 'document_generate',
-            executionPrompt: 'Continue smoke flow',
-            outputMode: 'summary',
-          },
-        },
-      ],
-      outputs: [],
-      session: {
-        runtimeSessionKey: 'chat:chat_1:manager',
-        piSessionId: 'pi_session_1',
-        sessionStoreDriver: 'local_file',
-        sessionStoreRef: 'C:\\sessions\\chat_1.jsonl',
-        memorySummary: 'updated summary',
+    prisma.confirmationRequest.findUnique.mockResolvedValue({
+      id: 'confirm_1',
+      projectId: 'project_1',
+      environmentId: 'env_1',
+      groupRuntimeTaskId: 'task_1',
+      confirmedBy: 'ou_owner',
+      status: 'confirmed',
+      messageSourceId: 'source_1',
+      messageSource: {
+        feishuChatId: 'chat_1',
       },
     });
 
-    const result = await service.handleMentionMessage({
-      projectId: 'project_1',
-      environmentId: 'env_1',
-      feishuChatId: 'chat_1',
-      messageSourceId: 'source_1',
-      prompt: '[SMOKE_CONFIRM]',
-      senderOpenId: 'ou_sender',
-      traceId: 'trace_2',
+    const result = await service.resumeFromConfirmation('confirm_1', {
+      confirmationId: 'confirm_1',
+      taskId: 'task_1',
+      eventText: 'Continue after confirmation.',
     });
 
-    expect(result).toEqual({ status: 'waiting_confirmation', passes: 1 });
-    expect(confirmations.create).toHaveBeenCalledWith(
+    expect(result).toEqual({ accepted: true });
+    expect(piMono.resumeSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        groupRuntimeTaskId: 'task_1',
-        actionType: 'document_publish',
-      }),
-    );
-    expect(runtimeTasks.attachConfirmation).toHaveBeenCalledWith('task_1', 'confirm_1');
-    expect(groupSessions.syncGroupRuntimeState).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: 'session_1',
-        currentRuntimeTaskId: null,
-        runtimeStateJson: expect.objectContaining({
-          waitingConfirmation: true,
+        runtimeSessionKey: 'chat:chat_1:manager',
+        event: expect.objectContaining({
+          type: 'confirmation_resolved',
+          text: 'Continue after confirmation.',
         }),
       }),
     );

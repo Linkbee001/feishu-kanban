@@ -44,10 +44,11 @@ export class AgentService {
         projectId: project.id,
         environmentId: environment.id,
         messageSourceId: input.messageSourceId,
+        runType: 'formal_execution',
         intent: input.intent ?? 'requirement_analysis',
         skillName: input.skillName ?? null,
         prompt: input.prompt,
-      },
+      } as any,
     });
     await this.agentRunQueue.add('start', { agentRunId: run.id }, { jobId: run.id });
     return run;
@@ -361,10 +362,11 @@ export class AgentService {
         projectId: input.project.id,
         environmentId: input.environment.id,
         messageSourceId: input.messageSourceId,
+        runType: 'formal_execution',
         intent: input.intent,
         skillName: input.skillName ?? null,
         prompt: input.prompt,
-      },
+      } as any,
     });
 
     await this.groupSessions.markRunQueued({

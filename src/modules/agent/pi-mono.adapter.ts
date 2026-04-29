@@ -1,13 +1,20 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { BadGatewayException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AgentRunStatus } from '@prisma/client';
+import { Queue } from 'bullmq';
+import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import Redis from 'ioredis';
 import * as path from 'path';
 import type { AgentSession, ModelRegistry, SessionManager } from '@mariozechner/pi-coding-agent';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { ARTIFACT_SYNC_QUEUE } from '../../queues/queue.constants';
+import { FeishuService } from '../feishu/feishu.service';
 import { FeishuProjectReader } from '../feishu/feishu-project-reader.service';
 import { GROUP_AGENT_SESSION_REDIS } from './agent.constants';
 import {
+  AgentRunType,
   AgentOutput,
   CompiledRoleProfile,
   GroupRuntimeAction,
@@ -20,6 +27,16 @@ import {
   PiMonoExecutionResult,
   PiMonoSessionSnapshot,
   ProjectContextBundle,
+  RuntimeContextBinding,
+  RuntimeEvent,
+  RuntimeEventType,
+  RuntimeMinimalContext,
+  RuntimeQueueItemSnapshot,
+  RuntimeQueueMode,
+  RuntimeResumeInput,
+  RuntimeStateSnapshot,
+  RuntimeSubmitMessageInput,
+  RuntimeSubmitResult,
 } from './agent.types';
 import { MANAGER_INTERACTIVE_DECISION_SCHEMA } from './agent.schemas';
 import { resolveBundledPiSkillsDir } from './pi-skill-mapping';
@@ -35,9 +52,34 @@ type SessionRuntimeState = {
   lastAssistantText?: string;
   activeExecution?: ActiveExecutionState;
   currentProjectContextBundle?: ProjectContextBundle;
+  currentContextBinding?: RuntimeContextBinding;
+  currentMinimalContext?: RuntimeMinimalContext;
   currentRoleProfile?: CompiledRoleProfile;
-  currentRuntimeTasks?: GroupRuntimeTaskSnapshot[];
+  runtimeTaskSnapshots: GroupRuntimeTaskSnapshot[];
+  pendingRuntimeTaskEvents: Array<{ type: RuntimeEventType; payload: Record<string, unknown> }>;
+  queue: RuntimeQueuedMessage[];
+  currentTurn?: RuntimeTurnState;
+  waitingReason?: string;
+  waitingTaskId?: string;
+  eventSequence: number;
+  recentEvents: RuntimeEvent[];
+  actorQueue: Promise<unknown>;
   toolCache: Map<string, unknown>;
+};
+
+type RuntimeQueuedMessage = {
+  queueItemId: string;
+  mode: RuntimeQueueMode;
+  summary: string;
+  enqueuedAt: string;
+  envelopes: RuntimeSubmitMessageInput['envelope'][];
+};
+
+type RuntimeTurnState = {
+  turnId: string;
+  startedAt: string;
+  mode: 'group_runtime';
+  messageSourceId?: string;
 };
 
 type ActiveExecutionState = {
@@ -99,6 +141,13 @@ type RequestGroupConfirmationArgs = {
   payload?: unknown;
 };
 
+type ProjectRuntimeResource = {
+  projectId: string;
+  docFolderToken?: string | null;
+  bitableAppToken?: string | null;
+  bitableTableId?: string | null;
+};
+
 const nativeDynamicImport = new Function('specifier', 'return import(specifier)') as <T>(specifier: string) => Promise<T>;
 
 class PiMonoExecutionAbortError extends Error {
@@ -120,8 +169,10 @@ export class PiMonoAdapter {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly feishu: FeishuService,
     private readonly feishuReader: FeishuProjectReader,
     @Inject(GROUP_AGENT_SESSION_REDIS) private readonly redis: Redis,
+    @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactQueue: Queue,
   ) {}
 
   async executeRun(runId: string, payload: PiMonoCreateRunRequest): Promise<PiMonoExecutionResult> {
@@ -307,6 +358,174 @@ export class PiMonoAdapter {
     this.sessions.delete(runtimeSessionKey);
   }
 
+  async submitMessage(input: RuntimeSubmitMessageInput): Promise<RuntimeSubmitResult> {
+    const state = await this.ensureSession({
+      runtimeSessionKey: input.runtimeSessionKey,
+      repoMirrorPath: input.environment.repoMirrorPath,
+      repoSyncStatus: input.environment.repoSyncStatus,
+      projectPath: input.environment.projectPath,
+      roleProfile: input.roleProfile,
+    });
+    const result = await this.enqueueRuntimeActor(state, async () => {
+      await this.hydrateRuntimeState(state, input.contextBinding);
+      state.currentContextBinding = input.contextBinding;
+      state.currentMinimalContext = input.minimalContext;
+      state.currentRoleProfile = input.roleProfile;
+
+      const envelope = input.envelope;
+      await this.recordRuntimeEvent(state, 'message_submitted', {
+        messageSourceId: envelope.messageSourceId,
+        sourceType: envelope.sourceType,
+        rawText: envelope.rawText,
+        queueMode: input.queueMode ?? 'collect',
+      });
+
+      if (state.activeExecution?.mode === 'group_runtime' && state.session.isStreaming) {
+        return this.handleStreamingSubmission(state, input);
+      }
+
+      if (state.waitingReason) {
+        const queued = this.enqueueRuntimeMessage(state, input.queueMode ?? 'collect', envelope);
+        await this.recordRuntimeEvent(state, queued.type, queued.payload);
+        return {
+          accepted: true,
+          action: queued.type === 'message_collected' ? 'collected' : 'queued',
+          runtimeSessionKey: state.runtimeSessionKey,
+          activeTurnId: state.currentTurn?.turnId,
+        } satisfies RuntimeSubmitResult;
+      }
+
+      if (state.currentTurn) {
+        const queued = this.enqueueRuntimeMessage(state, input.queueMode ?? 'collect', envelope);
+        await this.recordRuntimeEvent(state, queued.type, queued.payload);
+        return {
+          accepted: true,
+          action: queued.type === 'message_collected' ? 'collected' : 'queued',
+          runtimeSessionKey: state.runtimeSessionKey,
+          activeTurnId: state.currentTurn?.turnId,
+        } satisfies RuntimeSubmitResult;
+      }
+
+      const turnId = randomUUID();
+      state.currentTurn = {
+        turnId,
+        startedAt: new Date().toISOString(),
+        mode: 'group_runtime',
+        messageSourceId: envelope.messageSourceId,
+      };
+      void this.runRuntimeTurn({
+        state,
+        project: input.project,
+        environment: input.environment,
+        roleProfile: input.roleProfile,
+        minimalContext: input.minimalContext,
+        queueMode: input.queueMode ?? 'collect',
+        reasonText: envelope.rawText,
+        source: {
+          messageSourceId: envelope.messageSourceId,
+          feishuMessageId: envelope.feishuMessageId,
+          senderOpenId: envelope.senderOpenId,
+          traceId: envelope.traceId,
+        },
+      });
+
+      return {
+        accepted: true,
+        action: 'run_now',
+        runtimeSessionKey: state.runtimeSessionKey,
+        activeTurnId: turnId,
+      } satisfies RuntimeSubmitResult;
+    });
+    return result;
+  }
+
+  async resumeSession(input: RuntimeResumeInput): Promise<{ accepted: boolean }> {
+    const state = await this.ensureSession({
+      runtimeSessionKey: input.runtimeSessionKey,
+      repoMirrorPath: input.environment.repoMirrorPath,
+      repoSyncStatus: input.environment.repoSyncStatus,
+      projectPath: input.environment.projectPath,
+      roleProfile: input.roleProfile,
+    });
+    return this.enqueueRuntimeActor(state, async () => {
+      await this.hydrateRuntimeState(state, input.contextBinding);
+      state.currentContextBinding = input.contextBinding;
+      state.currentMinimalContext = input.minimalContext;
+      state.currentRoleProfile = input.roleProfile;
+      state.waitingReason = undefined;
+      state.waitingTaskId =
+        typeof input.event.payload.taskId === 'string' ? input.event.payload.taskId : state.waitingTaskId;
+      if (state.waitingTaskId) {
+        this.transitionRuntimeTask(state, {
+          type: 'todo_write',
+          action: 'update',
+          taskId: state.waitingTaskId,
+          resultSummary: `Confirmation resolved via ${input.event.type}.`,
+        });
+        this.transitionRuntimeTask(state, {
+          type: 'todo_write',
+          action: 'start',
+          taskId: state.waitingTaskId,
+        });
+      }
+      await this.recordRuntimeEvent(state, 'session_resumed', {
+        type: input.event.type,
+        payload: input.event.payload,
+        text: input.event.text ?? null,
+      });
+
+      const turnId = randomUUID();
+      state.currentTurn = {
+        turnId,
+        startedAt: new Date().toISOString(),
+        mode: 'group_runtime',
+        messageSourceId:
+          typeof input.event.payload.messageSourceId === 'string'
+            ? input.event.payload.messageSourceId
+            : undefined,
+      };
+      void this.runRuntimeTurn({
+        state,
+        project: input.project,
+        environment: input.environment,
+        roleProfile: input.roleProfile,
+        minimalContext: input.minimalContext,
+        queueMode: 'followup',
+        reasonText:
+          input.event.text ??
+          `Resume the waiting runtime task after ${input.event.type}.`,
+        source: {
+          messageSourceId:
+            typeof input.event.payload.messageSourceId === 'string'
+              ? input.event.payload.messageSourceId
+              : null,
+          senderOpenId: null,
+          traceId: null,
+        },
+      });
+      return { accepted: true };
+    });
+  }
+
+  getRuntimeState(runtimeSessionKey: string): RuntimeStateSnapshot | null {
+    const state = this.sessions.get(runtimeSessionKey);
+    if (!state) {
+      return null;
+    }
+    return this.buildRuntimeStateSnapshot(state);
+  }
+
+  pullRuntimeEvents(input: {
+    runtimeSessionKey: string;
+    afterSequence?: number;
+  }): RuntimeEvent[] {
+    const state = this.sessions.get(input.runtimeSessionKey);
+    if (!state) {
+      return [];
+    }
+    return state.recentEvents.filter((event) => event.sequence > (input.afterSequence ?? 0));
+  }
+
   private async executePrompt(input: {
     runId?: string;
     payload: PiMonoCreateRunRequest;
@@ -329,6 +548,8 @@ export class PiMonoAdapter {
     };
     state.activeExecution = execution;
     state.currentProjectContextBundle = input.payload.projectContextBundle;
+    state.currentContextBinding = input.payload.contextBinding;
+    state.currentMinimalContext = input.payload.minimalContext;
 
     let cancelWatcher: NodeJS.Timeout | undefined;
     let timeoutHandle: NodeJS.Timeout | undefined;
@@ -407,6 +628,8 @@ export class PiMonoAdapter {
       state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
       state.activeExecution = undefined;
       state.currentProjectContextBundle = undefined;
+      state.currentContextBinding = undefined;
+      state.currentMinimalContext = undefined;
     }
   }
 
@@ -430,6 +653,8 @@ export class PiMonoAdapter {
     };
     state.activeExecution = execution;
     state.currentProjectContextBundle = input.payload.projectContextBundle;
+    state.currentContextBinding = input.payload.contextBinding;
+    state.currentMinimalContext = input.payload.minimalContext;
 
     let timeoutHandle: NodeJS.Timeout | undefined;
 
@@ -489,6 +714,8 @@ export class PiMonoAdapter {
       state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
       state.activeExecution = undefined;
       state.currentProjectContextBundle = undefined;
+      state.currentContextBinding = undefined;
+      state.currentMinimalContext = undefined;
     }
   }
 
@@ -514,8 +741,12 @@ export class PiMonoAdapter {
     };
     state.activeExecution = execution;
     state.currentProjectContextBundle = input.payload.projectContextBundle;
+    state.currentContextBinding = input.payload.contextBinding;
+    state.currentMinimalContext = input.payload.minimalContext;
     state.currentRoleProfile = input.payload.roleProfile;
-    state.currentRuntimeTasks = input.payload.runtimeTasks ?? [];
+    if (input.payload.runtimeTasks?.length) {
+      state.runtimeTaskSnapshots = input.payload.runtimeTasks;
+    }
 
     let timeoutHandle: NodeJS.Timeout | undefined;
 
@@ -578,7 +809,8 @@ export class PiMonoAdapter {
       state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
       state.activeExecution = undefined;
       state.currentProjectContextBundle = undefined;
-      state.currentRuntimeTasks = undefined;
+      state.currentContextBinding = undefined;
+      state.currentMinimalContext = undefined;
       state.currentRoleProfile = undefined;
     }
   }
@@ -662,8 +894,18 @@ export class PiMonoAdapter {
       lastAssistantText: undefined,
       activeExecution: undefined,
       currentProjectContextBundle: undefined,
+      currentContextBinding: undefined,
+      currentMinimalContext: undefined,
       currentRoleProfile: input.roleProfile,
-      currentRuntimeTasks: undefined,
+      runtimeTaskSnapshots: [],
+      pendingRuntimeTaskEvents: [],
+      queue: [],
+      currentTurn: undefined,
+      waitingReason: undefined,
+      waitingTaskId: undefined,
+      eventSequence: 0,
+      recentEvents: [],
+      actorQueue: Promise.resolve(),
       toolCache: new Map<string, unknown>(),
     };
 
@@ -829,10 +1071,10 @@ export class PiMonoAdapter {
         additionalProperties: false,
       } as any,
       execute: async () => {
-        const context = this.requireProjectContextBundle(state);
-        const cacheKey = `folder:${context.project.docFolderToken ?? 'none'}`;
+        const project = await this.getProjectRuntimeResource(state);
+        const cacheKey = `folder:${project.docFolderToken ?? 'none'}`;
         const result = await this.getOrLoadCachedToolResult(state, cacheKey, async () =>
-          this.feishuReader.listProjectFolder(context.project.docFolderToken),
+          this.feishuReader.listProjectFolder(project.docFolderToken),
         );
         return {
           content: [{ type: 'text', text: JSON.stringify(result) }],
@@ -880,9 +1122,9 @@ export class PiMonoAdapter {
         additionalProperties: false,
       } as any,
       execute: async (_toolCallId: string, params: SearchProjectDocsArgs) => {
-        const context = this.requireProjectContextBundle(state);
+        const project = await this.getProjectRuntimeResource(state);
         const result = await this.feishuReader.searchProjectDocuments(
-          context.project.docFolderToken,
+          project.docFolderToken,
           params.query,
         );
         return {
@@ -904,12 +1146,12 @@ export class PiMonoAdapter {
         additionalProperties: false,
       } as any,
       execute: async () => {
-        const context = this.requireProjectContextBundle(state);
-        const cacheKey = `bitable:${context.project.bitableAppToken ?? 'none'}:${context.project.bitableTableId ?? 'none'}`;
+        const project = await this.getProjectRuntimeResource(state);
+        const cacheKey = `bitable:${project.bitableAppToken ?? 'none'}:${project.bitableTableId ?? 'none'}`;
         const result = await this.getOrLoadCachedToolResult(state, cacheKey, async () =>
           this.feishuReader.readBitableSnapshot(
-            context.project.bitableAppToken,
-            context.project.bitableTableId,
+            project.bitableAppToken,
+            project.bitableTableId,
           ),
         );
         return {
@@ -933,10 +1175,10 @@ export class PiMonoAdapter {
         additionalProperties: false,
       } as any,
       execute: async (_toolCallId: string, params: ListRecentArtifactsArgs) => {
-        const context = this.requireProjectContextBundle(state);
+        const context = this.requireContextBinding(state);
         const limit = Math.min(Math.max(Number(params.limit ?? 10), 1), 20);
         const result = await this.prisma.artifact.findMany({
-          where: { projectId: context.project.id },
+          where: { projectId: context.projectId },
           orderBy: { createdAt: 'desc' },
           take: limit,
           select: {
@@ -979,7 +1221,7 @@ export class PiMonoAdapter {
       } as any,
       execute: async (_toolCallId: string, _params: TodoListArgs) => {
         return {
-          content: [{ type: 'text', text: JSON.stringify(state.currentRuntimeTasks ?? []) }],
+          content: [{ type: 'text', text: JSON.stringify(state.runtimeTaskSnapshots ?? []) }],
         };
       },
     } as any;
@@ -1017,6 +1259,10 @@ export class PiMonoAdapter {
         const action = this.normalizeTodoWriteAction(params);
         if (!action) {
           throw new Error('todo_write requires a valid action payload');
+        }
+        const snapshot = this.transitionRuntimeTask(state, action);
+        if (snapshot && !action.taskId) {
+          action.taskId = snapshot.id;
         }
         activeExecution.actions ??= [];
         activeExecution.actions.push(action);
@@ -1096,12 +1342,33 @@ export class PiMonoAdapter {
     } as any;
   }
 
-  private requireProjectContextBundle(state: SessionRuntimeState) {
-    if (!state.currentProjectContextBundle) {
-      throw new Error('Feishu project tools require a project context bundle');
+  private requireContextBinding(state: SessionRuntimeState) {
+    if (!state.currentContextBinding) {
+      throw new Error('Feishu project tools require a runtime context binding');
     }
 
-    return state.currentProjectContextBundle;
+    return state.currentContextBinding;
+  }
+
+  private async getProjectRuntimeResource(state: SessionRuntimeState): Promise<ProjectRuntimeResource> {
+    const context = this.requireContextBinding(state);
+    return this.getOrLoadCachedToolResult(state, `project:${context.projectId}`, async () => {
+      const project = await this.prisma.project.findUniqueOrThrow({
+        where: { id: context.projectId },
+        select: {
+          id: true,
+          docFolderToken: true,
+          bitableAppToken: true,
+          bitableTableId: true,
+        },
+      });
+      return {
+        projectId: project.id,
+        docFolderToken: project.docFolderToken,
+        bitableAppToken: project.bitableAppToken,
+        bitableTableId: project.bitableTableId,
+      };
+    });
   }
 
   private async getOrLoadCachedToolResult<T>(state: SessionRuntimeState, key: string, loader: () => Promise<T>) {
@@ -1304,8 +1571,8 @@ export class PiMonoAdapter {
       `Repository: ${payload.environment.repoUrl ?? 'not configured'}`,
       `Branch: ${payload.environment.repoBranch ?? 'not configured'}`,
       `Repo mirror path: ${payload.environment.repoMirrorPath ?? 'not prepared'}`,
-      `Repo sync status: ${payload.environment.repoSyncStatus ?? 'unknown'}`,
-      `Repo head: ${payload.environment.repoHeadRef ?? 'unknown'}`,
+      `Repo sync status: ${payload.minimalContext?.repoReady ? 'ready' : payload.environment.repoSyncStatus ?? 'unknown'}`,
+      `Repo head: ${payload.minimalContext?.repoHeadRef ?? payload.environment.repoHeadRef ?? 'unknown'}`,
       `Intent: ${payload.intent}`,
       '',
       'Available built-in tools are read-only: read, grep, find, ls.',
@@ -1317,18 +1584,14 @@ export class PiMonoAdapter {
         ? 'Use the current local repo mirror as the source of truth for code inspection.'
         : 'Code context is not currently available from a ready local repo mirror. Do not assume repository contents; use only what you can verify.',
       'Feishu project materials are not mirrored locally. Query them with tools only when needed.',
+      payload.minimalContext?.sessionMemorySummary
+        ? `Session memory summary: ${payload.minimalContext.sessionMemorySummary}`
+        : 'Session memory summary: none',
       payload.environment.repoSyncError ? `Latest repo sync error: ${payload.environment.repoSyncError}` : 'Latest repo sync error: none',
-      payload.projectContextBundle
-        ? 'A serialized project context bundle is attached below. Reuse it instead of guessing project state.'
-        : 'No project context bundle is attached.',
       payload.roleProfile ? 'A compiled role profile context file is attached below.' : 'No role profile is attached.',
       `Target output schema: ${JSON.stringify(payload.outputSchema)}`,
       '',
       ...(payload.roleProfile ? ['Compiled AGENTS.md (virtual):', payload.roleProfile.compiledContextFile, ''] : []),
-      ...(payload.projectContextBundle
-        ? ['Project context bundle (JSON):', JSON.stringify(payload.projectContextBundle), '']
-        : []),
-      ...(groupRuntimeMode ? ['Persisted runtime todo queue (JSON):', JSON.stringify(payload.runtimeTasks ?? []), ''] : []),
       'User request:',
       payload.prompt,
     ].join('\n');
@@ -1378,6 +1641,708 @@ export class PiMonoAdapter {
       sessionStoreRef: state.sessionStoreRef,
       memorySummary: this.buildMemorySummary(outputs, assistantText ?? state.lastAssistantText),
     };
+  }
+
+  private async enqueueRuntimeActor<T>(state: SessionRuntimeState, operation: () => Promise<T>): Promise<T> {
+    const next = state.actorQueue.then(operation);
+    state.actorQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private async hydrateRuntimeState(state: SessionRuntimeState, contextBinding: RuntimeContextBinding) {
+    if (state.eventSequence === 0) {
+      const persistedEvents = await (this.prisma as any).runtimeEvent.findMany({
+        where: { runtimeSessionKey: state.runtimeSessionKey },
+        orderBy: { sequence: 'asc' },
+        take: 100,
+      });
+      state.recentEvents = persistedEvents.map((event) => ({
+        sequence: event.sequence,
+        at: event.createdAt.toISOString(),
+        type: event.eventType as RuntimeEventType,
+        payload:
+          event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+            ? (event.payload as Record<string, unknown>)
+            : {},
+      }));
+      state.eventSequence = persistedEvents[persistedEvents.length - 1]?.sequence ?? 0;
+    }
+
+    if (!state.runtimeTaskSnapshots.length && contextBinding.groupSessionId) {
+      const tasks = await this.prisma.groupRuntimeTask.findMany({
+        where: {
+          groupSessionId: contextBinding.groupSessionId,
+          status: {
+            in: ['queued', 'running', 'blocked', 'waiting_confirmation'],
+          },
+        },
+        orderBy: [{ orderIndex: 'asc' }, { createdAt: 'asc' }],
+      });
+      state.runtimeTaskSnapshots = tasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        intent: task.intent,
+        skillHint: task.skillHint,
+        outputMode: task.outputMode,
+        orderIndex: task.orderIndex,
+        status: task.status,
+        blockedReason: task.blockedReason,
+        nextActionHint: task.nextActionHint,
+        priority: task.priority,
+        triggerType: task.triggerType,
+        taskPayloadJson:
+          task.taskPayloadJson && typeof task.taskPayloadJson === 'object' && !Array.isArray(task.taskPayloadJson)
+            ? (task.taskPayloadJson as Record<string, unknown>)
+            : null,
+        resultSummary: task.resultSummary,
+        lastError: task.lastError,
+      }));
+      const waiting = state.runtimeTaskSnapshots.find((task) => task.status === 'waiting_confirmation');
+      if (waiting) {
+        state.waitingTaskId = waiting.id;
+        state.waitingReason = waiting.blockedReason ?? waiting.resultSummary ?? 'Waiting for confirmation';
+      }
+    }
+  }
+
+  private buildRuntimeStateSnapshot(state: SessionRuntimeState): RuntimeStateSnapshot {
+    return {
+      runtimeSessionKey: state.runtimeSessionKey,
+      piSessionId: state.session.sessionId,
+      status: state.waitingReason
+        ? 'waiting_confirmation'
+        : state.activeExecution
+          ? state.activeExecution.canceled
+            ? 'aborting'
+            : 'running'
+          : state.session.isCompacting
+            ? 'compacting'
+            : state.queue.length
+              ? 'queued'
+              : 'idle',
+      currentTurn: state.currentTurn
+        ? {
+            turnId: state.currentTurn.turnId,
+            mode: state.currentTurn.mode,
+            messageSourceId: state.currentTurn.messageSourceId,
+            startedAt: state.currentTurn.startedAt,
+          }
+        : undefined,
+      queue: state.queue.map((item): RuntimeQueueItemSnapshot => ({
+        queueItemId: item.queueItemId,
+        messageSourceId: item.envelopes[0]?.messageSourceId,
+        mode: item.mode,
+        summary: item.summary,
+        enqueuedAt: item.enqueuedAt,
+      })),
+      waitingReason: state.waitingReason,
+      isStreaming: state.session.isStreaming,
+      isCompacting: state.session.isCompacting,
+      memorySummary: this.buildMemorySummary(undefined, state.lastAssistantText),
+    };
+  }
+
+  private async handleStreamingSubmission(
+    state: SessionRuntimeState,
+    input: RuntimeSubmitMessageInput,
+  ): Promise<RuntimeSubmitResult> {
+    const queueMode = input.queueMode ?? 'collect';
+    const envelope = input.envelope;
+
+    if (queueMode === 'steer' && !state.session.isCompacting) {
+      await state.session.steer(envelope.rawText);
+      await this.recordRuntimeEvent(state, 'message_steered', {
+        messageSourceId: envelope.messageSourceId,
+        rawText: envelope.rawText,
+      });
+      return {
+        accepted: true,
+        action: 'steered',
+        runtimeSessionKey: state.runtimeSessionKey,
+        activeTurnId: state.currentTurn?.turnId,
+      };
+    }
+
+    if (queueMode === 'interrupt') {
+      const queued = this.enqueueRuntimeMessage(state, 'interrupt', envelope, true);
+      if (state.activeExecution) {
+        state.activeExecution.canceled = true;
+      }
+      await this.recordRuntimeEvent(state, 'message_interrupted', queued.payload);
+      await state.session.abort().catch((error) => {
+        this.logger.warn(
+          `Failed to abort streaming runtime session ${state.runtimeSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+      return {
+        accepted: true,
+        action: 'interrupted',
+        runtimeSessionKey: state.runtimeSessionKey,
+        activeTurnId: state.currentTurn?.turnId,
+      };
+    }
+
+    const queued = this.enqueueRuntimeMessage(state, queueMode, envelope);
+    await this.recordRuntimeEvent(state, queued.type, queued.payload);
+    return {
+      accepted: true,
+      action: queued.type === 'message_collected' ? 'collected' : 'queued',
+      runtimeSessionKey: state.runtimeSessionKey,
+      activeTurnId: state.currentTurn?.turnId,
+    };
+  }
+
+  private enqueueRuntimeMessage(
+    state: SessionRuntimeState,
+    mode: RuntimeQueueMode,
+    envelope: RuntimeSubmitMessageInput['envelope'],
+    front = false,
+  ) {
+    if (mode === 'collect') {
+      const candidate = front ? state.queue[0] : state.queue[state.queue.length - 1];
+      if (candidate && candidate.mode === 'collect') {
+        if (front) {
+          candidate.envelopes.unshift(envelope);
+        } else {
+          candidate.envelopes.push(envelope);
+        }
+        candidate.summary = this.summarizeEnvelopes(candidate.envelopes);
+        return {
+          type: 'message_collected' as const,
+          payload: {
+            queueItemId: candidate.queueItemId,
+            messageSourceId: envelope.messageSourceId,
+            mode: candidate.mode,
+            summary: candidate.summary,
+          },
+        };
+      }
+    }
+
+    const item: RuntimeQueuedMessage = {
+      queueItemId: randomUUID(),
+      mode,
+      summary: this.summarizeEnvelopes([envelope]),
+      enqueuedAt: new Date().toISOString(),
+      envelopes: [envelope],
+    };
+    if (front) {
+      state.queue.unshift(item);
+    } else {
+      state.queue.push(item);
+    }
+    const eventType: 'message_collected' | 'message_queued' =
+      mode === 'collect' ? 'message_collected' : 'message_queued';
+    return {
+      type: eventType,
+      payload: {
+        queueItemId: item.queueItemId,
+        messageSourceId: envelope.messageSourceId,
+        mode: item.mode,
+        summary: item.summary,
+      },
+    };
+  }
+
+  private summarizeEnvelopes(envelopes: RuntimeSubmitMessageInput['envelope'][]) {
+    if (envelopes.length === 1) {
+      return envelopes[0].rawText.slice(0, 160);
+    }
+    return `${envelopes.length} queued messages: ${envelopes
+      .map((item) => item.rawText.trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(' | ')}`
+      .slice(0, 200);
+  }
+
+  private async runRuntimeTurn(input: {
+    state: SessionRuntimeState;
+    project: PiMonoCreateRunRequest['project'];
+    environment: PiMonoCreateRunRequest['environment'];
+    roleProfile?: CompiledRoleProfile;
+    minimalContext?: RuntimeMinimalContext;
+    queueMode: RuntimeQueueMode;
+    reasonText: string;
+    source: PiMonoCreateRunRequest['source'];
+  }) {
+    const state = input.state;
+    const turn = state.currentTurn;
+    if (!turn) {
+      return;
+    }
+
+    await this.recordRuntimeEvent(state, 'turn_started', {
+      turnId: turn.turnId,
+      messageSourceId: turn.messageSourceId,
+      queueLength: state.queue.length,
+    });
+
+    try {
+      const result = await this.executeGroupRuntimePrompt({
+        payload: {
+          runtimeSessionKey: state.runtimeSessionKey,
+          sessionStoreRef: state.sessionStoreRef ?? null,
+          sessionMode: 'active',
+          requestKind: 'group_runtime',
+          wakeMode: 'interactive',
+          contextBinding: state.currentContextBinding,
+          minimalContext: input.minimalContext,
+          roleProfile: input.roleProfile,
+          runtimeTasks: state.runtimeTaskSnapshots,
+          project: input.project,
+          environment: input.environment,
+          source: input.source,
+          intent: 'requirement_analysis',
+          skillName: null,
+          prompt: input.reasonText,
+          outputSchema: {},
+        },
+        timeoutMs: 60_000,
+      });
+
+      if (result.status !== 'succeeded') {
+        await this.recordRuntimeEvent(state, 'turn_failed', {
+          turnId: turn.turnId,
+          status: result.status,
+        });
+      } else {
+        await this.applyRuntimeTurnResult(state, result, input.source.messageSourceId ?? null);
+        if (!state.waitingReason) {
+          await this.recordRuntimeEvent(state, 'turn_completed', {
+            turnId: turn.turnId,
+            outputSummary: result.outputSummary ?? null,
+          });
+        }
+      }
+    } catch (error) {
+      await this.recordRuntimeEvent(state, 'turn_failed', {
+        turnId: turn.turnId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      this.logger.warn(
+        `Runtime turn ${turn.turnId} failed in session ${state.runtimeSessionKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    } finally {
+      state.currentTurn = undefined;
+      if (!state.waitingReason) {
+        await this.startNextQueuedTurn(state, input.project, input.environment, input.roleProfile, input.minimalContext);
+      }
+    }
+  }
+
+  private async startNextQueuedTurn(
+    state: SessionRuntimeState,
+    project: PiMonoCreateRunRequest['project'],
+    environment: PiMonoCreateRunRequest['environment'],
+    roleProfile?: CompiledRoleProfile,
+    minimalContext?: RuntimeMinimalContext,
+  ) {
+    if (state.currentTurn || state.waitingReason || !state.queue.length) {
+      return;
+    }
+
+    const next = state.queue.shift()!;
+    state.currentTurn = {
+      turnId: randomUUID(),
+      startedAt: new Date().toISOString(),
+      mode: 'group_runtime',
+      messageSourceId: next.envelopes[0]?.messageSourceId,
+    };
+
+    void this.runRuntimeTurn({
+      state,
+      project,
+      environment,
+      roleProfile,
+      minimalContext,
+      queueMode: next.mode,
+      reasonText: this.buildQueuedPrompt(next),
+      source: {
+        messageSourceId: next.envelopes[0]?.messageSourceId,
+        feishuMessageId: next.envelopes[0]?.feishuMessageId,
+        senderOpenId: next.envelopes[0]?.senderOpenId ?? null,
+        traceId: next.envelopes[0]?.traceId ?? null,
+      },
+    });
+  }
+
+  private buildQueuedPrompt(item: RuntimeQueuedMessage) {
+    if (item.envelopes.length === 1) {
+      return item.envelopes[0].rawText;
+    }
+    return [
+      'Process these collected group messages together as the next runtime turn:',
+      ...item.envelopes.map((envelope, index) => `${index + 1}. ${envelope.rawText}`),
+    ].join('\n');
+  }
+
+  private async applyRuntimeTurnResult(
+    state: SessionRuntimeState,
+    result: GroupRuntimeTurnResult,
+    messageSourceId: string | null,
+  ) {
+    for (const action of result.actions) {
+      if (action.type === 'todo_write') {
+        const snapshot = action.taskId ? this.findRuntimeTaskSnapshot(state, action.taskId) : null;
+        await this.recordRuntimeEvent(state, 'todo_changed', {
+          action: action.action,
+          task: snapshot,
+          messageSourceId,
+        });
+        continue;
+      }
+
+      if (action.type === 'reply_group') {
+        await this.recordRuntimeEvent(state, 'reply_emitted', {
+          text: action.text,
+          messageSourceId,
+        });
+        continue;
+      }
+
+      if (action.type === 'request_group_confirmation') {
+        if (action.taskId) {
+          const snapshot = this.findRuntimeTaskSnapshot(state, action.taskId);
+          if (snapshot) {
+            snapshot.status = 'waiting_confirmation';
+            snapshot.blockedReason = action.summary;
+            snapshot.resultSummary = 'Waiting for confirmation';
+            state.waitingTaskId = snapshot.id;
+            state.waitingReason = snapshot.blockedReason ?? action.summary;
+            await this.recordRuntimeEvent(state, 'todo_changed', {
+              action: 'waiting_confirmation',
+              task: snapshot,
+              messageSourceId,
+            });
+          }
+        } else {
+          state.waitingReason = action.summary;
+        }
+
+        await this.recordRuntimeEvent(state, 'confirmation_requested', {
+          taskId: action.taskId ?? null,
+          actionType: action.actionType,
+          summary: action.summary,
+          detail: action.detail ?? null,
+          payload: action.payload,
+          messageSourceId,
+        });
+        await this.recordRuntimeEvent(state, 'session_waiting', {
+          taskId: action.taskId ?? null,
+          reason: action.summary,
+        });
+      }
+    }
+
+    if (result.outputs?.length) {
+      await this.recordRuntimeEvent(state, 'outputs_emitted', {
+        outputs: result.outputs,
+        messageSourceId,
+        taskId: this.findActiveRuntimeTaskId(state),
+      });
+    }
+  }
+
+  private transitionRuntimeTask(state: SessionRuntimeState, action: GroupRuntimeTodoWriteAction) {
+    if (action.action === 'create') {
+      const snapshot: GroupRuntimeTaskSnapshot = {
+        id: action.taskId ?? randomUUID(),
+        title: action.title ?? 'Untitled runtime task',
+        description: action.description ?? null,
+        intent: action.intent ?? 'requirement_analysis',
+        skillHint: action.skillHint ?? null,
+        outputMode: action.outputMode ?? null,
+        orderIndex: (state.runtimeTaskSnapshots[state.runtimeTaskSnapshots.length - 1]?.orderIndex ?? -1) + 1,
+        status: 'queued',
+        taskPayloadJson: action.taskPayload ?? null,
+        resultSummary: action.resultSummary ?? null,
+        lastError: action.errorMessage ?? null,
+      };
+      state.runtimeTaskSnapshots.push(snapshot);
+      return snapshot;
+    }
+
+    const snapshot = action.taskId ? this.findRuntimeTaskSnapshot(state, action.taskId) : null;
+    if (!snapshot) {
+      return null;
+    }
+
+    if (action.title !== undefined) snapshot.title = action.title;
+    if (action.description !== undefined) snapshot.description = action.description;
+    if (action.intent !== undefined) snapshot.intent = action.intent;
+    if (action.skillHint !== undefined) snapshot.skillHint = action.skillHint ?? null;
+    if (action.outputMode !== undefined) snapshot.outputMode = action.outputMode ?? null;
+    if (action.taskPayload !== undefined) snapshot.taskPayloadJson = action.taskPayload;
+    if (action.resultSummary !== undefined) snapshot.resultSummary = action.resultSummary;
+    if (action.errorMessage !== undefined) snapshot.lastError = action.errorMessage;
+
+    switch (action.action) {
+      case 'update':
+        break;
+      case 'start':
+        snapshot.status = 'running';
+        snapshot.blockedReason = null;
+        snapshot.lastError = null;
+        break;
+      case 'complete':
+        snapshot.status = 'completed';
+        break;
+      case 'fail':
+        snapshot.status = 'failed';
+        break;
+      case 'cancel':
+        snapshot.status = 'canceled';
+        break;
+      case 'block':
+        snapshot.status = 'blocked';
+        snapshot.blockedReason = action.resultSummary ?? 'Task blocked';
+        break;
+    }
+
+    return snapshot;
+  }
+
+  private findRuntimeTaskSnapshot(state: SessionRuntimeState, taskId: string) {
+    return state.runtimeTaskSnapshots.find((task) => task.id === taskId) ?? null;
+  }
+
+  private findActiveRuntimeTaskId(state: SessionRuntimeState) {
+    return (
+      state.runtimeTaskSnapshots.find((task) => task.status === 'running')?.id ??
+      state.waitingTaskId ??
+      state.runtimeTaskSnapshots[state.runtimeTaskSnapshots.length - 1]?.id ??
+      null
+    );
+  }
+
+  private async recordRuntimeEvent(
+    state: SessionRuntimeState,
+    type: RuntimeEventType,
+    payload: Record<string, unknown>,
+  ) {
+    const event: RuntimeEvent = {
+      sequence: state.eventSequence + 1,
+      at: new Date().toISOString(),
+      type,
+      payload,
+    };
+    state.eventSequence = event.sequence;
+    state.recentEvents.push(event);
+    if (state.recentEvents.length > 100) {
+      state.recentEvents.splice(0, state.recentEvents.length - 100);
+    }
+
+    await (this.prisma as any).runtimeEvent.create({
+      data: {
+        runtimeSessionKey: state.runtimeSessionKey,
+        groupSessionId: state.currentContextBinding?.groupSessionId ?? null,
+        projectId: state.currentContextBinding?.projectId ?? null,
+        environmentId: state.currentContextBinding?.environmentId ?? null,
+        sequence: event.sequence,
+        eventType: event.type,
+        payload: event.payload as any,
+      },
+    });
+
+    await this.projectRuntimeEvent(state, event);
+  }
+
+  private async projectRuntimeEvent(state: SessionRuntimeState, event: RuntimeEvent) {
+    if (event.type === 'reply_emitted') {
+      const chatId =
+        typeof event.payload.feishuChatId === 'string'
+          ? event.payload.feishuChatId
+          : state.currentContextBinding?.feishuChatId;
+      const text = typeof event.payload.text === 'string' ? event.payload.text : null;
+      if (chatId && text) {
+        await this.feishu.sendTextMessage('chat_id', chatId, text);
+      }
+      return;
+    }
+
+    if (event.type === 'todo_changed') {
+      const task =
+        event.payload.task && typeof event.payload.task === 'object' && !Array.isArray(event.payload.task)
+          ? (event.payload.task as GroupRuntimeTaskSnapshot)
+          : null;
+      if (!task || !state.currentContextBinding?.groupSessionId) {
+        return;
+      }
+      await this.prisma.groupRuntimeTask.upsert({
+        where: { id: task.id },
+        create: {
+          id: task.id,
+          groupSessionId: state.currentContextBinding.groupSessionId,
+          projectId: state.currentContextBinding.projectId,
+          environmentId: state.currentContextBinding.environmentId,
+          messageSourceId:
+            typeof event.payload.messageSourceId === 'string' ? event.payload.messageSourceId : null,
+          title: task.title,
+          description: task.description ?? null,
+          intent: task.intent,
+          skillHint: task.skillHint ?? null,
+          outputMode: task.outputMode ?? null,
+          orderIndex: task.orderIndex,
+          status: task.status,
+          blockedReason: task.blockedReason ?? null,
+          nextActionHint: task.nextActionHint ?? null,
+          priority: task.priority ?? 0,
+          triggerType: task.triggerType ?? null,
+          taskPayloadJson: (task.taskPayloadJson ?? {}) as any,
+          resultSummary: task.resultSummary ?? null,
+          lastError: task.lastError ?? null,
+        },
+        update: {
+          messageSourceId:
+            typeof event.payload.messageSourceId === 'string' ? event.payload.messageSourceId : undefined,
+          title: task.title,
+          description: task.description ?? null,
+          intent: task.intent,
+          skillHint: task.skillHint ?? null,
+          outputMode: task.outputMode ?? null,
+          orderIndex: task.orderIndex,
+          status: task.status,
+          blockedReason: task.blockedReason ?? null,
+          nextActionHint: task.nextActionHint ?? null,
+          priority: task.priority ?? 0,
+          triggerType: task.triggerType ?? null,
+          taskPayloadJson: (task.taskPayloadJson ?? {}) as any,
+          resultSummary: task.resultSummary ?? null,
+          lastError: task.lastError ?? null,
+        },
+      });
+      return;
+    }
+
+    if (event.type === 'confirmation_requested') {
+      await this.createRuntimeConfirmation(state, event.payload);
+      return;
+    }
+
+    if (event.type === 'outputs_emitted') {
+      await this.createRuntimeAuditRun(state, event.payload);
+    }
+  }
+
+  private async createRuntimeConfirmation(state: SessionRuntimeState, payload: Record<string, unknown>) {
+    const chatId = state.currentContextBinding?.feishuChatId;
+    const messageSourceId = typeof payload.messageSourceId === 'string' ? payload.messageSourceId : null;
+    if (!chatId || !messageSourceId) {
+      return;
+    }
+    const ttl = this.config.get<number>('CONFIRMATION_TTL_MINUTES') ?? 30;
+    const expiresAt = new Date(Date.now() + ttl * 60_000);
+    const confirmation = await this.prisma.confirmationRequest.create({
+      data: {
+        projectId: state.currentContextBinding?.projectId,
+        environmentId: state.currentContextBinding?.environmentId,
+        messageSourceId,
+        groupRuntimeTaskId: typeof payload.taskId === 'string' ? payload.taskId : null,
+        actionType: typeof payload.actionType === 'string' ? payload.actionType : 'runtime_confirmation',
+        payload: (payload.payload ?? {}) as any,
+        expiresAt,
+      },
+    });
+    const sent = await this.feishu.sendCard(
+      'chat_id',
+      chatId,
+      this.buildRuntimeConfirmationCard(
+        confirmation.id,
+        typeof payload.actionType === 'string' ? payload.actionType : 'runtime_confirmation',
+        expiresAt,
+        typeof payload.summary === 'string' ? payload.summary : undefined,
+        typeof payload.detail === 'string' ? payload.detail : undefined,
+      ),
+    );
+    const cardMessageId = (sent as any)?.data?.message_id ?? null;
+    await this.prisma.confirmationRequest.update({
+      where: { id: confirmation.id },
+      data: { cardMessageId },
+    });
+  }
+
+  private buildRuntimeConfirmationCard(
+    id: string,
+    actionType: string,
+    expiresAt: Date,
+    summary?: string,
+    detail?: string,
+  ) {
+    return {
+      config: { wide_screen_mode: true },
+      header: { title: { tag: 'plain_text', content: '需要确认' }, template: 'orange' },
+      elements: [
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: [
+              `动作：${actionType}`,
+              summary ? `说明：${summary}` : null,
+              detail ? `原因：${detail}` : null,
+              `过期时间：${expiresAt.toISOString()}`,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          },
+        },
+        {
+          tag: 'action',
+          actions: [
+            {
+              tag: 'button',
+              text: { tag: 'plain_text', content: '确认' },
+              type: 'primary',
+              value: { confirmationId: id, decision: 'confirm' },
+            },
+            {
+              tag: 'button',
+              text: { tag: 'plain_text', content: '拒绝' },
+              type: 'danger',
+              value: { confirmationId: id, decision: 'reject' },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  private async createRuntimeAuditRun(state: SessionRuntimeState, payload: Record<string, unknown>) {
+    if (!state.currentContextBinding?.projectId || !state.currentContextBinding.environmentId) {
+      return;
+    }
+    const outputs = Array.isArray(payload.outputs) ? this.normalizeOutputs(payload.outputs) : [];
+    if (!outputs.length) {
+      return;
+    }
+    const taskId = typeof payload.taskId === 'string' ? payload.taskId : this.findActiveRuntimeTaskId(state);
+    const task = taskId ? this.findRuntimeTaskSnapshot(state, taskId) : null;
+    const run = await this.prisma.agentRun.create({
+      data: {
+        projectId: state.currentContextBinding.projectId,
+        environmentId: state.currentContextBinding.environmentId,
+        messageSourceId:
+          typeof payload.messageSourceId === 'string' ? payload.messageSourceId : null,
+        groupRuntimeTaskId: taskId,
+        runType: 'runtime_audit' as AgentRunType,
+        intent: task?.intent ?? 'requirement_analysis',
+        skillName: task?.skillHint ?? null,
+        prompt: 'Generated by runtime event projection.',
+        status: AgentRunStatus.syncing,
+        progress: 95,
+        outputSummary: this.buildOutputSummary(outputs),
+        rawOutputs: outputs as any,
+        startedAt: new Date(),
+      } as any,
+    });
+    await this.artifactQueue.add('sync-run', { agentRunId: run.id }, { jobId: `${run.id}-sync` });
   }
 
   private createSessionManager(

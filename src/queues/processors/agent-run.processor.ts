@@ -7,7 +7,6 @@ import { AgentService } from '../../modules/agent/agent.service';
 import { AGENT_OUTPUT_SCHEMA } from '../../modules/agent/agent.schemas';
 import { GroupAgentSessionService } from '../../modules/agent/group-agent-session.service';
 import { PiMonoAdapter } from '../../modules/agent/pi-mono.adapter';
-import { ProjectRuntimeContextService } from '../../modules/agent/project-runtime-context.service';
 import { RepoSyncService } from '../../modules/repo/repo-sync.service';
 import { AGENT_RUN_QUEUE, ARTIFACT_SYNC_QUEUE } from '../queue.constants';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -22,7 +21,6 @@ export class AgentRunProcessor extends WorkerHost {
     private readonly agent: AgentService,
     private readonly groupSessions: GroupAgentSessionService,
     private readonly piMono: PiMonoAdapter,
-    private readonly runtimeContext: ProjectRuntimeContextService,
     private readonly repoSync: RepoSyncService,
     @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactQueue: Queue,
   ) {
@@ -70,16 +68,6 @@ export class AgentRunProcessor extends WorkerHost {
         where: { id: run.environment.id },
       });
 
-      const projectContextBundle = await this.runtimeContext.assemble({
-        projectId: run.project.id,
-        environmentId: environment.id,
-        runtimeSessionKey:
-          groupSession?.runtimeSessionKey ?? this.groupSessions.createRuntimeSessionKey(run.project.feishuChatId),
-        sessionMode: groupSession?.sessionMode ?? 'active',
-        sessionStatus: this.runtimeContext.toSessionStatus(groupSession?.status),
-        memorySummary: groupSession?.memorySummary ?? null,
-      });
-
       const execution = await this.piMono.executeRun(run.id, {
         runtimeSessionKey:
           groupSession?.runtimeSessionKey ?? this.groupSessions.createRuntimeSessionKey(run.project.feishuChatId),
@@ -88,7 +76,17 @@ export class AgentRunProcessor extends WorkerHost {
           groupSession?.agentScopeKey ?? this.groupSessions.createAgentScopeKey(run.projectId),
         sessionMode: groupSession?.sessionMode ?? 'active',
         requestKind: 'formal_execution',
-        projectContextBundle,
+        contextBinding: {
+          groupSessionId: groupSession?.id ?? null,
+          projectId: run.project.id,
+          environmentId: environment.id,
+          feishuChatId: run.project.feishuChatId,
+        },
+        minimalContext: {
+          sessionMemorySummary: groupSession?.memorySummary ?? null,
+          repoReady: environment.repoSyncStatus === 'ready',
+          repoHeadRef: environment.repoHeadRef,
+        },
         project: { id: run.project.id, name: run.project.name, feishuChatId: run.project.feishuChatId },
         environment: {
           id: environment.id,

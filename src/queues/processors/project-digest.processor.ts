@@ -97,6 +97,7 @@ export class ProjectDigestProcessor extends WorkerHost {
         projectId: session.projectId,
         environmentId,
         messageSourceId: null,
+        runType: 'digest',
         intent: job.data.digestType === 'weekly_report_draft' ? 'weekly_report' : 'progress_summary',
         skillName: job.data.digestType === 'weekly_report_draft' ? 'weekly_report' : 'progress_summary',
         prompt: this.digests.buildPrompt({
@@ -106,7 +107,7 @@ export class ProjectDigestProcessor extends WorkerHost {
           internalOnly: job.data.internalOnly,
           context,
         }),
-      },
+      } as any,
     });
 
     const digestSessionKey = this.digests.buildDigestSessionKey(context.project.feishuChatId, job.data.digestType);

@@ -1,7 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { GroupSessionStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { ProjectContextBundle } from './agent.types';
+import {
+  BitableSnapshot,
+  FeishuDocumentSnapshot,
+  FeishuFolderEntrySnapshot,
+  GroupPolicySnapshot,
+  GroupRuntimeTaskSnapshot,
+  ProjectContextBundle,
+  ProjectMemberProfileSnapshot,
+} from './agent.types';
 import { FeishuProjectReader } from '../feishu/feishu-project-reader.service';
 
 @Injectable()
@@ -26,40 +34,15 @@ export class ProjectRuntimeContextService {
       this.prisma.projectEnvironment.findUniqueOrThrow({
         where: { id: input.environmentId },
       }),
-      this.prisma.messageSource.findMany({
-        where: { projectId: input.projectId },
-        orderBy: { receivedAt: 'desc' },
-        take: 30,
-      }),
-      this.prisma.agentRun.findMany({
-        where: { projectId: input.projectId },
-        orderBy: { createdAt: 'desc' },
-        take: 12,
-      }),
-      this.prisma.artifact.findMany({
-        where: { projectId: input.projectId },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      }),
-      this.prisma.groupRuntimeTask.findMany({
-        where: { projectId: input.projectId },
-        orderBy: [{ updatedAt: 'desc' }, { orderIndex: 'asc' }],
-        take: 20,
-      }),
-      this.prisma.groupPolicy.findFirst({
-        where: {
-          projectId: input.projectId,
-          archivedAt: null,
-        },
-        orderBy: { updatedAt: 'desc' },
-      }),
-      this.prisma.projectMemberProfile.findMany({
-        where: {
-          projectId: input.projectId,
-          feishuChatId: projectChatIdFilter(input.runtimeSessionKey),
-        },
-        orderBy: [{ isDecisionMaker: 'desc' }, { updatedAt: 'desc' }],
-        take: 50,
+      this.getRecentMessages({ projectId: input.projectId, limit: 30 }),
+      this.getRecentRuns({ projectId: input.projectId, limit: 12 }),
+      this.getRecentArtifacts({ projectId: input.projectId, limit: 20 }),
+      this.getRuntimeTasks({ projectId: input.projectId, limit: 20 }),
+      this.getGroupPolicy({ projectId: input.projectId, feishuChatId: projectChatIdFilter(input.runtimeSessionKey) }),
+      this.listMemberProfiles({
+        projectId: input.projectId,
+        feishuChatId: projectChatIdFilter(input.runtimeSessionKey),
+        limit: 50,
       }),
     ]);
 
@@ -118,54 +101,11 @@ export class ProjectRuntimeContextService {
         sessionMode: input.sessionMode,
         status: input.sessionStatus,
       },
-      groupPolicy: policy
-        ? {
-            enabled: policy.enabled,
-            mentionOnly: policy.mentionOnly,
-            allowedSkills: Array.isArray(policy.allowedSkillsJson)
-              ? policy.allowedSkillsJson.map((item) => String(item))
-              : [],
-            defaultEnvironmentId: policy.defaultEnvironmentId,
-            allowAutoTaskCreation: policy.allowAutoTaskCreation,
-            allowTaskBoardWrite: policy.allowTaskBoardWrite,
-            allowDocWrite: policy.allowDocWrite,
-            highRiskActionsRequireConfirmation: policy.highRiskActionsRequireConfirmation,
-            archivedAt: policy.archivedAt?.toISOString() ?? null,
-          }
-        : null,
-      memberProfiles: memberProfiles.map((profile) => ({
-        id: profile.id,
-        openId: profile.openId,
-        displayName: profile.displayName,
-        groupNickname: profile.groupNickname,
-        projectRole: profile.projectRole,
-        responsibility: profile.responsibility,
-        permissionLevel: profile.permissionLevel,
-        isDecisionMaker: profile.isDecisionMaker,
-        isTaskAssignable: profile.isTaskAssignable,
-        lastActiveAt: profile.lastActiveAt?.toISOString() ?? null,
-      })),
-      recentMessages: recentMessages.map((message) => ({
-        id: message.id,
-        senderOpenId: message.senderOpenId,
-        rawText: message.rawText,
-        receivedAt: message.receivedAt.toISOString(),
-      })),
-      recentRuns: recentRuns.map((run) => ({
-        id: run.id,
-        intent: run.intent,
-        status: run.status,
-        outputSummary: run.outputSummary,
-        finishedAt: run.finishedAt?.toISOString() ?? null,
-      })),
-      recentArtifacts: recentArtifacts.map((artifact) => ({
-        id: artifact.id,
-        type: artifact.type,
-        title: artifact.title,
-        status: artifact.status,
-        createdAt: artifact.createdAt.toISOString(),
-        feishuUrl: artifact.feishuUrl,
-      })),
+      groupPolicy: policy,
+      memberProfiles,
+      recentMessages,
+      recentRuns,
+      recentArtifacts,
       runtimeTasksSummary: {
         queued: recentTasks.filter((task) => task.status === 'queued').length,
         running: recentTasks.filter((task) => task.status === 'running').length,
@@ -215,6 +155,157 @@ export class ProjectRuntimeContextService {
     if (status === GroupSessionStatus.error) return 'error';
     if (status === GroupSessionStatus.disabled) return 'disabled';
     return 'idle';
+  }
+
+  async getRecentMessages(input: { projectId: string; limit?: number }) {
+    const messages = await this.prisma.messageSource.findMany({
+      where: { projectId: input.projectId },
+      orderBy: { receivedAt: 'desc' },
+      take: input.limit ?? 20,
+    });
+    return messages.map((message) => ({
+      id: message.id,
+      senderOpenId: message.senderOpenId,
+      rawText: message.rawText,
+      receivedAt: message.receivedAt.toISOString(),
+    }));
+  }
+
+  async getRecentRuns(input: { projectId: string; limit?: number }) {
+    const runs = await this.prisma.agentRun.findMany({
+      where: { projectId: input.projectId },
+      orderBy: { createdAt: 'desc' },
+      take: input.limit ?? 10,
+    });
+    return runs.map((run) => ({
+      id: run.id,
+      intent: run.intent,
+      status: run.status,
+      outputSummary: run.outputSummary,
+      finishedAt: run.finishedAt?.toISOString() ?? null,
+    }));
+  }
+
+  async getRecentArtifacts(input: { projectId: string; limit?: number }) {
+    const artifacts = await this.prisma.artifact.findMany({
+      where: { projectId: input.projectId },
+      orderBy: { createdAt: 'desc' },
+      take: input.limit ?? 20,
+    });
+    return artifacts.map((artifact) => ({
+      id: artifact.id,
+      type: artifact.type,
+      title: artifact.title,
+      status: artifact.status,
+      createdAt: artifact.createdAt.toISOString(),
+      feishuUrl: artifact.feishuUrl,
+    }));
+  }
+
+  async getRuntimeTasks(input: { sessionId?: string; projectId?: string; limit?: number }): Promise<GroupRuntimeTaskSnapshot[]> {
+    const tasks = await this.prisma.groupRuntimeTask.findMany({
+      where: {
+        ...(input.sessionId ? { groupSessionId: input.sessionId } : {}),
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+      },
+      orderBy: [{ updatedAt: 'desc' }, { orderIndex: 'asc' }],
+      take: input.limit ?? 20,
+    });
+    return tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      intent: task.intent,
+      skillHint: task.skillHint,
+      outputMode: task.outputMode,
+      orderIndex: task.orderIndex,
+      status: task.status,
+      blockedReason: task.blockedReason,
+      nextActionHint: task.nextActionHint,
+      priority: task.priority,
+      triggerType: task.triggerType,
+      taskPayloadJson:
+        task.taskPayloadJson && typeof task.taskPayloadJson === 'object' && !Array.isArray(task.taskPayloadJson)
+          ? (task.taskPayloadJson as Record<string, unknown>)
+          : null,
+      resultSummary: task.resultSummary,
+      lastError: task.lastError,
+    }));
+  }
+
+  async getGroupPolicy(input: { projectId: string; feishuChatId: string }): Promise<GroupPolicySnapshot | null> {
+    const policy = await this.prisma.groupPolicy.findFirst({
+      where: {
+        projectId: input.projectId,
+        feishuChatId: input.feishuChatId,
+        archivedAt: null,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (!policy) {
+      return null;
+    }
+      return {
+        enabled: policy.enabled,
+        mentionOnly: policy.mentionOnly,
+        defaultQueueMode: ((policy as any).defaultQueueMode ?? 'collect') as GroupPolicySnapshot['defaultQueueMode'],
+        allowedSkills: Array.isArray(policy.allowedSkillsJson)
+        ? policy.allowedSkillsJson.map((item) => String(item))
+        : [],
+      defaultEnvironmentId: policy.defaultEnvironmentId,
+      allowAutoTaskCreation: policy.allowAutoTaskCreation,
+      allowTaskBoardWrite: policy.allowTaskBoardWrite,
+      allowDocWrite: policy.allowDocWrite,
+      highRiskActionsRequireConfirmation: policy.highRiskActionsRequireConfirmation,
+      archivedAt: policy.archivedAt?.toISOString() ?? null,
+    };
+  }
+
+  async listMemberProfiles(input: {
+    projectId: string;
+    feishuChatId: string;
+    limit?: number;
+  }): Promise<ProjectMemberProfileSnapshot[]> {
+    const profiles = await this.prisma.projectMemberProfile.findMany({
+      where: {
+        projectId: input.projectId,
+        feishuChatId: input.feishuChatId,
+      },
+      orderBy: [{ isDecisionMaker: 'desc' }, { updatedAt: 'desc' }],
+      take: input.limit ?? 50,
+    });
+    return profiles.map((profile) => ({
+      id: profile.id,
+      openId: profile.openId,
+      displayName: profile.displayName,
+      groupNickname: profile.groupNickname,
+      projectRole: profile.projectRole,
+      responsibility: profile.responsibility,
+      permissionLevel: profile.permissionLevel,
+      isDecisionMaker: profile.isDecisionMaker,
+      isTaskAssignable: profile.isTaskAssignable,
+      lastActiveAt: profile.lastActiveAt?.toISOString() ?? null,
+    }));
+  }
+
+  listProjectFolder(input: { docFolderToken?: string | null }): Promise<{
+    entries: FeishuFolderEntrySnapshot[];
+    documents: FeishuDocumentSnapshot[];
+    truncated: boolean;
+  }> {
+    return this.reader.scanProjectFolder(input.docFolderToken);
+  }
+
+  readProjectDoc(input: { token?: string | null; title?: string | null }) {
+    return this.reader.readProjectDocument(input.token, input.title);
+  }
+
+  searchProjectDocs(input: { docFolderToken?: string | null; query?: string | null }) {
+    return this.reader.searchProjectDocuments(input.docFolderToken, input.query);
+  }
+
+  readProjectBitable(input: { appToken?: string | null; tableId?: string | null }): Promise<BitableSnapshot | null> {
+    return this.reader.readBitableSnapshot(input.appToken, input.tableId);
   }
 }
 

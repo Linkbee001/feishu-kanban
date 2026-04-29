@@ -68,7 +68,9 @@ export class AdminService {
         activeEnvironmentName: session.activeEnvironment?.name ?? null,
         lastActiveAt: session.lastMessageAt?.toISOString() ?? session.updatedAt.toISOString(),
         lastError: session.lastError,
+        runtimeState: this.runtimeStateFromJson(session.runtimeStateJson),
         recentSkill: recentRun?.skillName ?? recentRun?.intent ?? null,
+        recentRunType: (recentRun as any)?.runType ?? null,
         recentArtifactSummary: recentArtifact ? `${recentArtifact.type}:${recentArtifact.title}` : null,
         taskCounts: counts,
         policy: this.policies.toSnapshot(policy),
@@ -115,7 +117,9 @@ export class AdminService {
       activeEnvironmentName: session.activeEnvironment?.name ?? null,
       lastActiveAt: session.lastMessageAt?.toISOString() ?? session.updatedAt.toISOString(),
       lastError: session.lastError,
+      runtimeState: this.runtimeStateFromJson(session.runtimeStateJson),
       recentSkill: recentRun?.skillName ?? recentRun?.intent ?? null,
+      recentRunType: (recentRun as any)?.runType ?? null,
       recentArtifactSummary: recentArtifact ? `${recentArtifact.type}:${recentArtifact.title}` : null,
       taskCounts: counts,
       policy: this.policies.toSnapshot(policy),
@@ -131,6 +135,8 @@ export class AdminService {
     return {
       session: snapshot.session,
       profile: snapshot.profile,
+      runtimeState: snapshot.runtimeState ?? null,
+      runtimeEvents: snapshot.runtimeEvents ?? [],
       summary: counts,
       tasks: snapshot.tasks ?? [],
     };
@@ -154,7 +160,7 @@ export class AdminService {
       throw new NotFoundException('Robot instance not found');
     }
 
-    const [messages, runs, artifacts, confirmations] = await Promise.all([
+    const [messages, runs, artifacts, confirmations, runtimeEvents] = await Promise.all([
       this.prisma.messageSource.findMany({
         where: { feishuChatId: chatId },
         orderBy: { receivedAt: 'desc' },
@@ -175,9 +181,16 @@ export class AdminService {
         orderBy: { expiresAt: 'desc' },
         take: 20,
       }),
+      (this.prisma as any).runtimeEvent.findMany({
+        where: {
+          projectId: session.projectId,
+        },
+        orderBy: [{ createdAt: 'desc' }, { sequence: 'desc' }],
+        take: 50,
+      }),
     ]);
 
-    return { messages, runs, artifacts, confirmations };
+    return { messages, runs, artifacts, confirmations, runtimeEvents };
   }
 
   getMembers(chatId: string) {
@@ -250,6 +263,12 @@ export class AdminService {
       result.set(task.groupSessionId, counts);
     }
     return result;
+  }
+
+  private runtimeStateFromJson(value: unknown) {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? ({ ...(value as Record<string, unknown>) })
+      : null;
   }
 }
 

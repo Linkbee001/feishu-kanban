@@ -18,6 +18,7 @@ describe('AdminService', () => {
             projectId: 'project_1',
             sessionMode: 'active',
             status: 'idle',
+            runtimeStateJson: { status: 'running', queue: [] },
             lastMessageAt: new Date('2026-04-28T10:00:00.000Z'),
             updatedAt: new Date('2026-04-28T10:00:00.000Z'),
             lastError: null,
@@ -39,6 +40,7 @@ describe('AdminService', () => {
           projectId: 'project_1',
           sessionMode: 'active',
           status: 'idle',
+          runtimeStateJson: { status: 'running', queue: [] },
           lastMessageAt: new Date('2026-04-28T10:00:00.000Z'),
           updatedAt: new Date('2026-04-28T10:00:00.000Z'),
           lastError: null,
@@ -63,12 +65,13 @@ describe('AdminService', () => {
       },
       agentRun: {
         findMany: jest.fn().mockResolvedValue([
-          { projectId: 'project_1', intent: 'progress_summary', skillName: 'progress-summary' },
+          { projectId: 'project_1', intent: 'progress_summary', skillName: 'progress-summary', runType: 'formal_execution' },
         ]),
         findFirst: jest.fn().mockResolvedValue({
           projectId: 'project_1',
           intent: 'progress_summary',
           skillName: 'progress-summary',
+          runType: 'formal_execution',
         }),
       },
       artifact: {
@@ -87,6 +90,7 @@ describe('AdminService', () => {
             feishuChatId: 'chat_1',
             enabled: true,
             mentionOnly: true,
+            defaultQueueMode: 'collect',
             allowedSkillsJson: ['progress-summary'],
             defaultEnvironmentId: 'env_1',
             allowAutoTaskCreation: true,
@@ -99,12 +103,15 @@ describe('AdminService', () => {
       },
       messageSource: { findMany: jest.fn().mockResolvedValue([]) },
       confirmationRequest: { findMany: jest.fn().mockResolvedValue([]) },
+      runtimeEvent: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const runtime = {
       getSessionSnapshot: jest.fn().mockResolvedValue({
         session: { id: 'session_1' },
         profile: null,
         tasks: [{ id: 'task_1', title: 'Do work', status: 'queued', intent: 'progress_summary' }],
+        runtimeState: { status: 'running', queue: [] },
+        runtimeEvents: [{ sequence: 1, type: 'turn_started', at: '2026-04-28T10:00:00.000Z', payload: {} }],
       }),
     };
     const feishu = {
@@ -122,6 +129,7 @@ describe('AdminService', () => {
         id: 'policy_1',
         enabled: true,
         mentionOnly: true,
+        defaultQueueMode: 'collect',
         allowedSkillsJson: ['progress-summary'],
         defaultEnvironmentId: 'env_1',
         allowAutoTaskCreation: true,
@@ -134,6 +142,7 @@ describe('AdminService', () => {
         id: 'policy_1',
         enabled: true,
         mentionOnly: true,
+        defaultQueueMode: 'collect',
         allowedSkillsJson: ['progress-summary'],
         defaultEnvironmentId: 'env_1',
         allowAutoTaskCreation: true,
@@ -146,6 +155,7 @@ describe('AdminService', () => {
       toSnapshot: jest.fn((policy: any) => ({
         enabled: policy.enabled,
         mentionOnly: policy.mentionOnly,
+        defaultQueueMode: policy.defaultQueueMode,
         allowedSkills: policy.allowedSkillsJson,
         defaultEnvironmentId: policy.defaultEnvironmentId,
         allowAutoTaskCreation: policy.allowAutoTaskCreation,
@@ -189,6 +199,7 @@ describe('AdminService', () => {
         sessionMode: 'active',
         sessionStatus: 'idle',
         recentSkill: 'progress-summary',
+        recentRunType: 'formal_execution',
         recentArtifactSummary: 'summary:Daily digest',
         taskCounts: expect.objectContaining({
           queued: 1,
@@ -208,6 +219,7 @@ describe('AdminService', () => {
       expect.objectContaining({
         enabled: true,
         mentionOnly: true,
+        defaultQueueMode: 'collect',
         allowedSkills: ['progress-summary'],
         defaultEnvironmentId: 'env_1',
       }),
