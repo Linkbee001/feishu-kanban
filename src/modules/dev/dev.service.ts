@@ -18,6 +18,7 @@ export class DevService {
     ownerOpenId?: string;
     repoUrl?: string;
     repoBranch?: string;
+    repoCredentialRef?: string;
   }) {
     const chatId = input.feishuChatId ?? 'dev_chat';
     const ownerOpenId = input.ownerOpenId ?? 'ou_dev_user';
@@ -50,6 +51,7 @@ export class DevService {
           data: {
             repoUrl: input.repoUrl,
             repoBranch: input.repoBranch ?? 'main',
+            repoCredentialRef: input.repoCredentialRef,
             status: EnvironmentStatus.active,
             lastActiveAt: new Date(),
           },
@@ -61,6 +63,7 @@ export class DevService {
             type: EnvironmentType.default,
             repoUrl: input.repoUrl,
             repoBranch: input.repoBranch ?? 'main',
+            repoCredentialRef: input.repoCredentialRef,
             repoAccessMode: RepoAccessMode.readonly,
             projectPath: process.env.PI_MONO_WORKDIR ?? '/workspace',
             modelName: process.env.PI_MONO_MODEL ?? 'kimi-k2.5',
@@ -285,6 +288,12 @@ export class DevService {
       take: limitConfirmations,
     });
 
+    const runtimeTasks = await this.prisma.groupRuntimeTask.findMany({
+      where: projectId ? { projectId } : undefined,
+      orderBy: [{ updatedAt: 'desc' }, { orderIndex: 'asc' }],
+      take: limitRuns,
+    });
+
     const counts = {
       sessions: activeSessions.length,
       disabledSessions: disabledSessions.length,
@@ -296,6 +305,8 @@ export class DevService {
       syncedArtifacts: artifacts.filter((artifact) => artifact.status === 'synced').length,
       failedArtifacts: artifacts.filter((artifact) => artifact.status === 'failed').length,
       activeSessionRuns: activeSessions.filter((session) => Boolean(session.currentAgentRunId)).length,
+      runtimeTasks: runtimeTasks.length,
+      waitingRuntimeTasks: runtimeTasks.filter((task) => task.status === 'waiting_confirmation').length,
     };
 
     return {
@@ -314,6 +325,7 @@ export class DevService {
         ...session,
         lock: null,
       })),
+      runtimeTasks,
       runs,
       artifacts,
       messages,

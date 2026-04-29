@@ -146,4 +146,36 @@ describe('FeishuProjectReader', () => {
     );
     expect(snapshot?.recentRows).toHaveLength(3);
   });
+
+  it('searches recent documents by keyword and tolerates read failures for direct reads', async () => {
+    const { reader, feishu } = createReader();
+
+    feishu.listDriveFiles.mockResolvedValue({
+      data: {
+        files: [
+          {
+            token: 'doc_1',
+            type: 'docx',
+            name: 'Weekly Sync',
+            edit_time: '2026-04-25T00:00:00.000Z',
+          },
+        ],
+        has_more: false,
+      },
+    });
+    feishu.getDocumentRawContent
+      .mockResolvedValueOnce({
+        data: {
+          content: 'Project risk and delivery notes',
+        },
+      })
+      .mockRejectedValueOnce(new Error('boom'));
+
+    const search = await reader.searchProjectDocuments('root', 'risk');
+    const direct = await reader.readProjectDocument('doc_404', 'Missing Doc');
+
+    expect(search).toHaveLength(1);
+    expect(search[0]).toEqual(expect.objectContaining({ token: 'doc_1' }));
+    expect(direct).toBeNull();
+  });
 });

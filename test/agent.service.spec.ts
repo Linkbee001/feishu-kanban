@@ -38,6 +38,9 @@ describe('AgentService', () => {
       assemble: jest.fn(),
       toSessionStatus: jest.fn(),
     };
+    const repoSync = {
+      maybeRefreshForInteractive: jest.fn(),
+    };
     const runQueueJob = {
       remove: jest.fn().mockResolvedValue(undefined),
     };
@@ -55,6 +58,7 @@ describe('AgentService', () => {
         groupSessions as any,
         piMono as any,
         runtimeContext as any,
+        repoSync as any,
         agentRunQueue as any,
         artifactSyncQueue as any,
       ),
@@ -62,6 +66,7 @@ describe('AgentService', () => {
       groupSessions,
       piMono,
       runtimeContext,
+      repoSync,
       agentRunQueue,
       runQueueJob,
     };

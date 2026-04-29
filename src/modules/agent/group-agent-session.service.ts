@@ -264,6 +264,29 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
     });
   }
 
+  async syncGroupRuntimeState(input: {
+    sessionId: string;
+    currentRuntimeTaskId?: string | null;
+    runtimeStateJson?: Record<string, unknown>;
+    touchRuntimeTurnAt?: boolean;
+  }) {
+    const data: Record<string, unknown> = {};
+    if (input.currentRuntimeTaskId !== undefined) {
+      data.currentRuntimeTaskId = input.currentRuntimeTaskId;
+    }
+    if (input.runtimeStateJson !== undefined) {
+      data.runtimeStateJson = input.runtimeStateJson;
+    }
+    if (input.touchRuntimeTurnAt) {
+      data.lastRuntimeTurnAt = new Date();
+    }
+
+    return this.prisma.groupAgentSession.update({
+      where: { id: input.sessionId },
+      data,
+    });
+  }
+
   getBootstrapDraft(session: GroupAgentSession) {
     const state = (session.sessionState ?? {}) as SessionState;
     return state.bootstrapDraft ?? {};

@@ -1,5 +1,6 @@
 export type AgentOutputType = 'document' | 'task' | 'file' | 'log' | 'summary';
 export type AgentWakeMode = 'interactive' | 'scheduled_digest' | 'event_digest' | 'maintenance';
+export type RuntimeSessionMode = 'bootstrap' | 'active' | 'disabled';
 export type DigestType =
   | 'daily_status'
   | 'weekly_report_draft'
@@ -21,6 +22,40 @@ export type ManagerIntent =
   | 'stale_project_review';
 export type ManagerInteractiveAction = 'ask_followup' | 'request_confirmation' | 'execute';
 export type ManagerInteractiveOutputMode = 'summary' | 'document' | 'task' | 'file' | 'mixed';
+export type GroupRuntimeTaskStatus =
+  | 'queued'
+  | 'running'
+  | 'blocked'
+  | 'waiting_confirmation'
+  | 'completed'
+  | 'failed'
+  | 'canceled';
+export type GroupRuntimeToolActionType = 'create' | 'update' | 'start' | 'complete' | 'fail' | 'cancel' | 'block';
+
+export interface GroupPolicySnapshot {
+  enabled: boolean;
+  mentionOnly: boolean;
+  allowedSkills: string[];
+  defaultEnvironmentId?: string | null;
+  allowAutoTaskCreation: boolean;
+  allowTaskBoardWrite: boolean;
+  allowDocWrite: boolean;
+  highRiskActionsRequireConfirmation: boolean;
+  archivedAt?: string | null;
+}
+
+export interface ProjectMemberProfileSnapshot {
+  id: string;
+  openId: string;
+  displayName: string;
+  groupNickname?: string | null;
+  projectRole?: string | null;
+  responsibility?: string | null;
+  permissionLevel: string;
+  isDecisionMaker: boolean;
+  isTaskAssignable: boolean;
+  lastActiveAt?: string | null;
+}
 
 export interface SummaryPolicy {
   enabled: boolean;
@@ -106,6 +141,11 @@ export interface ProjectContextBundle {
     name: string;
     repoUrl?: string | null;
     repoBranch?: string | null;
+    repoCredentialRef?: string | null;
+    repoMirrorPath?: string | null;
+    repoSyncStatus?: string | null;
+    repoSyncError?: string | null;
+    repoHeadRef?: string | null;
     projectPath?: string | null;
     modelName?: string | null;
     skillSet?: unknown;
@@ -113,9 +153,11 @@ export interface ProjectContextBundle {
   session: {
     runtimeSessionKey: string;
     memorySummary?: string | null;
-    sessionMode: 'bootstrap' | 'active' | 'disabled';
+    sessionMode: RuntimeSessionMode;
     status: 'idle' | 'busy' | 'error' | 'disabled';
   };
+  groupPolicy?: GroupPolicySnapshot | null;
+  memberProfiles: ProjectMemberProfileSnapshot[];
   recentMessages: Array<{
     id: string;
     senderOpenId: string;
@@ -137,11 +179,102 @@ export interface ProjectContextBundle {
     createdAt: string;
     feishuUrl?: string | null;
   }>;
+  runtimeTasksSummary: {
+    queued: number;
+    running: number;
+    blocked: number;
+    waitingConfirmation: number;
+    completed: number;
+    failed: number;
+    canceled: number;
+    recent: GroupRuntimeTaskSnapshot[];
+  };
+  workspaceDocsSummary: Array<{
+    title: string;
+    token: string;
+    url?: string | null;
+    updatedAt?: string | null;
+    summary?: string | null;
+  }>;
   folderEntries: FeishuFolderEntrySnapshot[];
   folderEntriesTruncated: boolean;
   docSnapshots: FeishuDocumentSnapshot[];
   bitableSnapshot: BitableSnapshot | null;
   sourceErrors?: Record<string, string>;
+}
+
+export interface CompiledRoleProfile {
+  agentRole: 'manager';
+  agentsMd: string;
+  soulMd: string;
+  userMd: string;
+  standingOrdersMd: string;
+  promptPreludeMd: string;
+  skills: string[];
+  compiledContextFile: string;
+}
+
+export interface GroupRuntimeTaskSnapshot {
+  id: string;
+  title: string;
+  description?: string | null;
+  intent: string;
+  skillHint?: string | null;
+  outputMode?: string | null;
+  orderIndex: number;
+  status: GroupRuntimeTaskStatus;
+  blockedReason?: string | null;
+  nextActionHint?: string | null;
+  priority?: number;
+  triggerType?: string | null;
+  taskPayloadJson?: Record<string, unknown> | null;
+  resultSummary?: string | null;
+  lastError?: string | null;
+}
+
+export interface GroupRuntimeTodoWriteAction {
+  type: 'todo_write';
+  action: GroupRuntimeToolActionType;
+  taskId?: string;
+  title?: string;
+  description?: string;
+  intent?: string;
+  skillHint?: string | null;
+  outputMode?: string | null;
+  taskPayload?: Record<string, unknown>;
+  blockedReason?: string;
+  nextActionHint?: string;
+  priority?: number;
+  triggerType?: string;
+  resultSummary?: string;
+  errorMessage?: string;
+}
+
+export interface GroupRuntimeReplyAction {
+  type: 'reply_group';
+  text: string;
+}
+
+export interface GroupRuntimeConfirmationAction {
+  type: 'request_group_confirmation';
+  taskId?: string;
+  actionType: string;
+  summary: string;
+  detail?: string;
+  payload: ManagerConfirmationPayload;
+}
+
+export type GroupRuntimeAction =
+  | GroupRuntimeTodoWriteAction
+  | GroupRuntimeReplyAction
+  | GroupRuntimeConfirmationAction;
+
+export interface GroupRuntimeTurnResult {
+  status: 'succeeded' | 'timeout' | 'canceled';
+  actions: GroupRuntimeAction[];
+  outputs?: AgentOutput[];
+  outputSummary?: string;
+  session: PiMonoSessionSnapshot;
 }
 
 export interface ManagerDecision {
@@ -183,11 +316,13 @@ export interface PiMonoCreateRunRequest {
   runtimeSessionKey: string;
   sessionStoreRef?: string | null;
   agentScopeKey?: string;
-  sessionMode?: 'bootstrap' | 'active' | 'disabled';
-  requestKind?: 'bootstrap' | 'interactive_decision' | 'formal_execution';
+  sessionMode?: RuntimeSessionMode;
+  requestKind?: 'bootstrap' | 'interactive_decision' | 'formal_execution' | 'group_runtime';
   wakeMode?: AgentWakeMode;
   digestType?: DigestType | null;
   projectContextBundle?: ProjectContextBundle;
+  roleProfile?: CompiledRoleProfile;
+  runtimeTasks?: GroupRuntimeTaskSnapshot[];
   project: {
     id: string;
     name: string;
@@ -199,6 +334,11 @@ export interface PiMonoCreateRunRequest {
     piMonoEnvId?: string | null;
     repoUrl?: string | null;
     repoBranch?: string | null;
+    repoCredentialRef?: string | null;
+    repoMirrorPath?: string | null;
+    repoSyncStatus?: string | null;
+    repoSyncError?: string | null;
+    repoHeadRef?: string | null;
     projectPath?: string | null;
     modelEndpoint?: string | null;
     modelName?: string | null;
@@ -229,6 +369,12 @@ export interface PiMonoExecutionResult {
   outputSummary?: string;
   outputs?: AgentOutput[];
   session: PiMonoSessionSnapshot;
+}
+
+export interface GroupRuntimeResumeInput {
+  confirmationId?: string;
+  taskId?: string;
+  eventText: string;
 }
 
 export type InteractiveGroupSubmitResult =

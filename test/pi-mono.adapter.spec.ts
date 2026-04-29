@@ -39,6 +39,23 @@ describe('PiMonoAdapter', () => {
     };
   }
 
+  function createPrisma() {
+    return {
+      artifact: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+  }
+
+  function createFeishuReader() {
+    return {
+      listProjectFolder: jest.fn(),
+      readProjectDocument: jest.fn(),
+      searchProjectDocuments: jest.fn(),
+      readBitableSnapshot: jest.fn(),
+    };
+  }
+
   function createModelRegistry() {
     return {
       find: jest.fn().mockReturnValue({ provider: 'bailian', id: 'kimi-k2.5' }),
@@ -50,7 +67,7 @@ describe('PiMonoAdapter', () => {
   it('stores SDK session metadata after creating a new runtime session', async () => {
     const config = createConfig();
     const redis = createRedis();
-    const adapter = new PiMonoAdapter(config as any, redis as any);
+    const adapter = new PiMonoAdapter(config as any, createPrisma() as any, createFeishuReader() as any, redis as any);
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\new-session.jsonl'),
     };
@@ -102,7 +119,19 @@ describe('PiMonoAdapter', () => {
     expect(fakeSdk.SessionManager.create).toHaveBeenCalled();
     expect(fakeSdk.createAgentSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        tools: ['read', 'grep', 'find', 'ls', 'emit_outputs', 'emit_decision'],
+        tools: expect.arrayContaining([
+          'read',
+          'grep',
+          'find',
+          'ls',
+          'emit_outputs',
+          'emit_decision',
+          'list_project_folder',
+          'read_project_doc',
+          'search_project_docs',
+          'read_project_bitable',
+          'list_recent_project_artifacts',
+        ]),
       }),
     );
     expect(adapter.getSessionSnapshot('chat:chat_1:manager')).toEqual(
@@ -123,7 +152,7 @@ describe('PiMonoAdapter', () => {
 
     const config = createConfig();
     const redis = createRedis();
-    const adapter = new PiMonoAdapter(config as any, redis as any);
+    const adapter = new PiMonoAdapter(config as any, createPrisma() as any, createFeishuReader() as any, redis as any);
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue(storeRef),
     };
@@ -165,5 +194,190 @@ describe('PiMonoAdapter', () => {
         sessionStoreRef: storeRef,
       }),
     );
+  });
+
+  it('prefers a ready repo mirror path over the legacy project path when resolving cwd', () => {
+    const readyDir = path.join(process.cwd(), '.tmp-ready-repo');
+    const projectDir = path.join(process.cwd(), '.tmp-project-path');
+    mkdirSync(readyDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    tempDirs.push(readyDir, projectDir);
+
+    const adapter = new PiMonoAdapter(
+      createConfig() as any,
+      createPrisma() as any,
+      createFeishuReader() as any,
+      createRedis() as any,
+    );
+
+    const cwd = (adapter as any).resolveCwd({
+      repoMirrorPath: readyDir,
+      repoSyncStatus: 'ready',
+      projectPath: projectDir,
+    });
+
+    expect(cwd).toBe(readyDir);
+  });
+
+  it('captures group runtime actions and injects virtual role context files', async () => {
+    const config = createConfig();
+    const redis = createRedis();
+    const adapter = new PiMonoAdapter(config as any, createPrisma() as any, createFeishuReader() as any, redis as any);
+    const fakeSessionManager = {
+      getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\group-runtime.jsonl'),
+    };
+    let emitTool: any;
+    let todoWriteTool: any;
+    let replyGroupTool: any;
+    let confirmationTool: any;
+    let resourceLoaderArgs: any;
+    class FakeResourceLoader {
+      constructor(args: any) {
+        resourceLoaderArgs = args;
+      }
+
+      async reload() {
+        return undefined;
+      }
+    }
+    const fakeSession = {
+      prompt: jest.fn(async (_prompt: string) => {
+        await todoWriteTool.execute('tool-1', {
+          action: 'create',
+          title: 'smoke task',
+          description: 'Check group runtime flow',
+          intent: 'progress_summary',
+          outputMode: 'summary',
+        });
+        await todoWriteTool.execute('tool-2', {
+          action: 'start',
+          taskId: 'task_1',
+          resultSummary: 'Started smoke task',
+        });
+        await replyGroupTool.execute('tool-3', {
+          text: 'SMOKE_CREATE_TASK_ACK',
+        });
+        await confirmationTool.execute('tool-4', {
+          taskId: 'task_1',
+          actionType: 'document_publish',
+          summary: 'Need approval',
+          detail: 'Please confirm smoke flow',
+          payload: {
+            reply: 'Need approval',
+            intent: 'document_generate',
+            executionPrompt: 'Continue smoke flow',
+            outputMode: 'summary',
+          },
+        });
+        await emitTool.execute('tool-5', {
+          outputs: [{ type: 'summary', title: 'smoke-summary', content: 'SMOKE_CREATE_TASK_DONE' }],
+        });
+      }),
+      getLastAssistantText: jest.fn().mockReturnValue('runtime summary'),
+      abort: jest.fn().mockResolvedValue(undefined),
+      dispose: jest.fn(),
+      sessionId: 'pi_group_runtime_1',
+    };
+    const fakeSdk = {
+      AuthStorage: {
+        create: jest.fn().mockReturnValue({}),
+      },
+      ModelRegistry: {
+        create: jest.fn().mockReturnValue(createModelRegistry()),
+      },
+      SessionManager: {
+        create: jest.fn().mockReturnValue(fakeSessionManager),
+        open: jest.fn(),
+      },
+      DefaultResourceLoader: FakeResourceLoader,
+      createAgentSession: jest.fn(async (options: any) => {
+        emitTool = options.customTools.find((tool: any) => tool.name === 'emit_outputs');
+        todoWriteTool = options.customTools.find((tool: any) => tool.name === 'todo_write');
+        replyGroupTool = options.customTools.find((tool: any) => tool.name === 'reply_group');
+        confirmationTool = options.customTools.find((tool: any) => tool.name === 'request_group_confirmation');
+        return { session: fakeSession };
+      }),
+    };
+
+    (adapter as any).loadSdk = jest.fn().mockResolvedValue(fakeSdk);
+    (adapter as any).ensureCustomModelsConfig = jest.fn();
+
+    const result = await adapter.runGroupRuntimeTurn({
+      runtimeSessionKey: 'chat:chat_runtime:manager',
+      sessionMode: 'active',
+      runtimeTasks: [],
+      roleProfile: {
+        agentRole: 'manager',
+        agentsMd: 'agents',
+        soulMd: 'soul',
+        userMd: 'user',
+        standingOrdersMd: 'standing orders',
+        promptPreludeMd: 'prelude',
+        skills: ['progress-summary'],
+        compiledContextFile: '# AGENTS\nsmoke profile',
+      },
+      project: {
+        id: 'project_1',
+        name: 'Payments',
+        feishuChatId: 'chat_runtime',
+      },
+      environment: {
+        id: 'env_1',
+        name: 'Default',
+        projectPath: process.cwd(),
+        repoSyncStatus: 'ready',
+      },
+      source: {
+        messageSourceId: 'source_1',
+        senderOpenId: 'ou_sender',
+      },
+      prompt: '[SMOKE_CREATE_TASK]',
+      outputSchema: {},
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.actions).toEqual([
+      expect.objectContaining({
+        type: 'todo_write',
+        action: 'create',
+        title: 'smoke task',
+      }),
+      expect.objectContaining({
+        type: 'todo_write',
+        action: 'start',
+        taskId: 'task_1',
+      }),
+      expect.objectContaining({
+        type: 'reply_group',
+        text: 'SMOKE_CREATE_TASK_ACK',
+      }),
+      expect.objectContaining({
+        type: 'request_group_confirmation',
+        taskId: 'task_1',
+        actionType: 'document_publish',
+      }),
+    ]);
+    expect(result.outputs).toEqual([
+      expect.objectContaining({
+        type: 'summary',
+        title: 'smoke-summary',
+      }),
+    ]);
+    expect(fakeSdk.createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.arrayContaining([
+          'todo_list',
+          'todo_write',
+          'reply_group',
+          'request_group_confirmation',
+        ]),
+      }),
+    );
+    expect(resourceLoaderArgs.agentsFilesOverride({ agentsFiles: [] }).agentsFiles).toEqual([
+      {
+        path: '/virtual/AGENTS.md',
+        content: '# AGENTS\nsmoke profile',
+      },
+    ]);
   });
 });

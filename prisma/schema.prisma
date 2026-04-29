@@ -28,6 +28,13 @@ enum EnvironmentStatus {
   error
 }
 
+enum RepoSyncStatus {
+  uninitialized
+  syncing
+  ready
+  error
+}
+
 enum RepoAccessMode {
   readonly
   write_protected
@@ -87,6 +94,16 @@ enum GroupSessionStatus {
   disabled
 }
 
+enum GroupRuntimeTaskStatus {
+  queued
+  running
+  blocked
+  waiting_confirmation
+  completed
+  failed
+  canceled
+}
+
 model Project {
   id                   String               @id @default(uuid()) @db.Uuid
   name                 String
@@ -110,6 +127,10 @@ model Project {
   artifacts            Artifact[]
   confirmations        ConfirmationRequest[]
   groupAgentSessions   GroupAgentSession[]
+  runtimeTasks         GroupRuntimeTask[]
+  agentProfileOverrides ProjectAgentProfileOverride[]
+  groupPolicies        GroupPolicy[]
+  memberProfiles       ProjectMemberProfile[]
 
   @@map("projects")
 }
@@ -122,7 +143,13 @@ model ProjectEnvironment {
   piMonoEnvId    String?           @map("pi_mono_env_id")
   repoUrl        String?           @map("repo_url")
   repoBranch     String?           @map("repo_branch")
+  repoCredentialRef String?        @map("repo_credential_ref")
   repoAccessMode RepoAccessMode    @default(readonly) @map("repo_access_mode")
+  repoMirrorPath String?           @map("repo_mirror_path")
+  repoSyncStatus RepoSyncStatus    @default(uninitialized) @map("repo_sync_status")
+  repoSyncError  String?           @map("repo_sync_error")
+  lastRepoSyncAt DateTime?         @map("last_repo_sync_at")
+  repoHeadRef    String?           @map("repo_head_ref")
   projectPath    String?           @map("project_path")
   modelEndpoint  String?           @map("model_endpoint")
   modelName      String?           @map("model_name")
@@ -139,6 +166,8 @@ model ProjectEnvironment {
   artifacts      Artifact[]
   confirmations  ConfirmationRequest[]
   groupAgentSessions GroupAgentSession[] @relation("GroupSessionEnvironment")
+  runtimeTasks   GroupRuntimeTask[]
+  groupPolicies  GroupPolicy[]
 
   @@index([projectId])
   @@map("project_environments")
@@ -154,6 +183,9 @@ model MessageSource {
   feishuMessageId String              @map("feishu_message_id")
   senderOpenId    String              @map("sender_open_id")
   rawText         String              @map("raw_text")
+  rawContentJson  Json?               @map("raw_content_json")
+  mentionsJson    Json?               @map("mentions_json")
+  isBotMentioned  Boolean             @default(false) @map("is_bot_mentioned")
   receivedAt      DateTime            @default(now()) @map("received_at")
   traceId         String              @map("trace_id")
   project         Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
@@ -161,6 +193,7 @@ model MessageSource {
   agentRuns       AgentRun[]
   artifacts       Artifact[]
   confirmations   ConfirmationRequest[]
+  groupRuntimeTasks GroupRuntimeTask[]
 
   @@unique([feishuMessageId, senderOpenId])
   @@index([feishuEventId])
@@ -172,6 +205,7 @@ model AgentRun {
   projectId       String              @map("project_id") @db.Uuid
   environmentId   String              @map("environment_id") @db.Uuid
   messageSourceId String?             @map("message_source_id") @db.Uuid
+  groupRuntimeTaskId String?          @map("group_runtime_task_id") @db.Uuid
   piMonoRunId     String?             @map("pi_mono_run_id")
   intent          String
   skillName       String?             @map("skill_name")
@@ -188,6 +222,7 @@ model AgentRun {
   project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   environment     ProjectEnvironment  @relation(fields: [environmentId], references: [id])
   messageSource   MessageSource?      @relation(fields: [messageSourceId], references: [id], onDelete: SetNull)
+  groupRuntimeTask GroupRuntimeTask?  @relation(fields: [groupRuntimeTaskId], references: [id], onDelete: SetNull)
   artifacts       Artifact[]
   currentInGroupSessions GroupAgentSession[] @relation("CurrentGroupRun")
 
@@ -201,6 +236,7 @@ model Artifact {
   projectId       String              @map("project_id") @db.Uuid
   environmentId   String?             @map("environment_id") @db.Uuid
   agentRunId      String?             @map("agent_run_id") @db.Uuid
+  groupRuntimeTaskId String?          @map("group_runtime_task_id") @db.Uuid
   messageSourceId String?             @map("message_source_id") @db.Uuid
   type            ArtifactType
   title           String
@@ -215,6 +251,7 @@ model Artifact {
   project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   environment     ProjectEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
   agentRun        AgentRun?           @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  groupRuntimeTask GroupRuntimeTask?  @relation(fields: [groupRuntimeTaskId], references: [id], onDelete: SetNull)
   messageSource   MessageSource?      @relation(fields: [messageSourceId], references: [id], onDelete: SetNull)
 
   @@unique([projectId, type, contentHash])
@@ -227,6 +264,7 @@ model ConfirmationRequest {
   projectId       String?             @map("project_id") @db.Uuid
   environmentId   String?             @map("environment_id") @db.Uuid
   messageSourceId String              @map("message_source_id") @db.Uuid
+  groupRuntimeTaskId String?          @map("group_runtime_task_id") @db.Uuid
   actionType      String              @map("action_type")
   payload         Json
   status          ConfirmationStatus  @default(pending)
@@ -236,6 +274,7 @@ model ConfirmationRequest {
   decidedAt       DateTime?           @map("decided_at")
   project         Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   environment     ProjectEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
+  groupRuntimeTask GroupRuntimeTask?  @relation(fields: [groupRuntimeTaskId], references: [id], onDelete: SetNull)
   messageSource   MessageSource       @relation(fields: [messageSourceId], references: [id], onDelete: Cascade)
 
   @@index([status, expiresAt])
@@ -271,12 +310,15 @@ model GroupAgentSession {
   sessionStoreDriver  String?            @map("session_store_driver")
   sessionStoreRef     String?            @map("session_store_ref")
   currentAgentRunId   String?            @unique @map("current_agent_run_id") @db.Uuid
+  currentRuntimeTaskId String?           @unique @map("current_runtime_task_id") @db.Uuid
   activeLockToken     String?            @map("active_lock_token")
   memorySummary       String?            @map("memory_summary")
   sessionState        Json               @default("{}") @map("session_state")
   summaryPolicyJson   Json               @default("{}") @map("summary_policy_json")
+  runtimeStateJson    Json               @default("{}") @map("runtime_state_json")
   lastMessageAt       DateTime?          @map("last_message_at")
   lastRunAt           DateTime?          @map("last_run_at")
+  lastRuntimeTurnAt   DateTime?          @map("last_runtime_turn_at")
   lastDigestAt        DateTime?          @map("last_digest_at")
   lastDigestType      String?            @map("last_digest_type")
   lastDigestHash      String?            @map("last_digest_hash")
@@ -287,6 +329,8 @@ model GroupAgentSession {
   project             Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
   activeEnvironment   ProjectEnvironment? @relation("GroupSessionEnvironment", fields: [activeEnvironmentId], references: [id], onDelete: SetNull)
   currentAgentRun     AgentRun?          @relation("CurrentGroupRun", fields: [currentAgentRunId], references: [id], onDelete: SetNull)
+  currentRuntimeTask  GroupRuntimeTask?  @relation("CurrentRuntimeTask", fields: [currentRuntimeTaskId], references: [id], onDelete: SetNull)
+  runtimeTasks        GroupRuntimeTask[]
 
   @@unique([projectId, agentRole])
   @@unique([feishuChatId, agentRole])
@@ -301,4 +345,118 @@ model FeishuEventDedup {
   traceId   String   @map("trace_id")
 
   @@map("feishu_event_dedup")
+}
+
+model GroupRuntimeTask {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  groupSessionId        String                 @map("group_session_id") @db.Uuid
+  projectId             String                 @map("project_id") @db.Uuid
+  environmentId         String                 @map("environment_id") @db.Uuid
+  messageSourceId       String?                @map("message_source_id") @db.Uuid
+  title                 String
+  description           String?
+  intent                String
+  skillHint             String?                @map("skill_hint")
+  outputMode            String?                @map("output_mode")
+  orderIndex            Int                    @default(0) @map("order_index")
+  status                GroupRuntimeTaskStatus @default(queued)
+  blockedReason         String?                @map("blocked_reason")
+  nextActionHint        String?                @map("next_action_hint")
+  priority              Int                    @default(0)
+  triggerType           String?                @map("trigger_type")
+  taskPayloadJson       Json                   @default("{}") @map("task_payload_json")
+  resultSummary         String?                @map("result_summary")
+  lastError             String?                @map("last_error")
+  startedAt             DateTime?              @map("started_at")
+  finishedAt            DateTime?              @map("finished_at")
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+  groupSession          GroupAgentSession      @relation(fields: [groupSessionId], references: [id], onDelete: Cascade)
+  project               Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  environment           ProjectEnvironment     @relation(fields: [environmentId], references: [id])
+  messageSource         MessageSource?         @relation(fields: [messageSourceId], references: [id], onDelete: SetNull)
+  confirmationRequests  ConfirmationRequest[]
+  agentRuns             AgentRun[]
+  artifacts             Artifact[]
+  currentInGroupSessions GroupAgentSession[]   @relation("CurrentRuntimeTask")
+
+  @@index([groupSessionId, orderIndex, createdAt])
+  @@index([projectId, status])
+  @@map("group_runtime_tasks")
+}
+
+model GroupPolicy {
+  id                                String              @id @default(uuid()) @db.Uuid
+  projectId                         String              @map("project_id") @db.Uuid
+  feishuChatId                      String              @map("feishu_chat_id")
+  enabled                           Boolean             @default(true)
+  mentionOnly                       Boolean             @default(true) @map("mention_only")
+  allowedSkillsJson                 Json                @default("[]") @map("allowed_skills_json")
+  defaultEnvironmentId              String?             @map("default_environment_id") @db.Uuid
+  allowAutoTaskCreation             Boolean             @default(true) @map("allow_auto_task_creation")
+  allowTaskBoardWrite               Boolean             @default(true) @map("allow_task_board_write")
+  allowDocWrite                     Boolean             @default(true) @map("allow_doc_write")
+  highRiskActionsRequireConfirmation Boolean            @default(true) @map("high_risk_actions_require_confirmation")
+  archivedAt                        DateTime?           @map("archived_at")
+  createdAt                         DateTime            @default(now()) @map("created_at")
+  updatedAt                         DateTime            @updatedAt @map("updated_at")
+  project                           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  defaultEnvironment                ProjectEnvironment? @relation(fields: [defaultEnvironmentId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, feishuChatId])
+  @@index([feishuChatId])
+  @@map("group_policies")
+}
+
+model ProjectMemberProfile {
+  id               String   @id @default(uuid()) @db.Uuid
+  projectId        String   @map("project_id") @db.Uuid
+  feishuChatId     String   @map("feishu_chat_id")
+  openId           String   @map("open_id")
+  displayName      String   @map("display_name")
+  groupNickname    String?  @map("group_nickname")
+  projectRole      String?  @map("project_role")
+  responsibility   String?
+  permissionLevel  String   @default("member") @map("permission_level")
+  isDecisionMaker  Boolean  @default(false) @map("is_decision_maker")
+  isTaskAssignable Boolean  @default(true) @map("is_task_assignable")
+  metadataJson     Json     @default("{}") @map("metadata_json")
+  lastActiveAt     DateTime? @map("last_active_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, feishuChatId, openId])
+  @@index([feishuChatId])
+  @@map("project_member_profiles")
+}
+
+model AgentRoleProfile {
+  agentRole         AgentRole @id @map("agent_role")
+  agentsMd          String    @default("") @map("agents_md")
+  soulMd            String    @default("") @map("soul_md")
+  userMdTemplate    String    @default("") @map("user_md_template")
+  standingOrdersMd  String    @default("") @map("standing_orders_md")
+  skillsJson        Json      @default("[]") @map("skills_json")
+  promptPreludeMd   String    @default("") @map("prompt_prelude_md")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  projectOverrides  ProjectAgentProfileOverride[]
+
+  @@map("agent_role_profiles")
+}
+
+model ProjectAgentProfileOverride {
+  id         String    @id @default(uuid()) @db.Uuid
+  projectId   String   @map("project_id") @db.Uuid
+  agentRole   AgentRole @map("agent_role")
+  overrideJson Json    @default("{}") @map("override_json")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  profile     AgentRoleProfile @relation(fields: [agentRole], references: [agentRole], onDelete: Cascade)
+
+  @@unique([projectId, agentRole])
+  @@index([agentRole])
+  @@map("project_agent_profile_overrides")
 }

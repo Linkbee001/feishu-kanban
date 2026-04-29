@@ -4,6 +4,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { GroupAgentSessionService } from '../agent/group-agent-session.service';
 import { EnvironmentService } from '../environment/environment.service';
 import { FeishuService } from '../feishu/feishu.service';
+import { GroupPolicyService } from './group-policy.service';
+import { ProjectMemberProfileService } from './project-member-profile.service';
 
 @Injectable()
 export class ProjectService {
@@ -12,6 +14,8 @@ export class ProjectService {
     private readonly groupSessions: GroupAgentSessionService,
     private readonly environments: EnvironmentService,
     private readonly feishu: FeishuService,
+    private readonly policies: GroupPolicyService,
+    private readonly memberProfiles: ProjectMemberProfileService,
   ) {}
 
   async initFromChat(input: {
@@ -22,8 +26,15 @@ export class ProjectService {
     createdBy?: string;
     repoUrl?: string;
     repoBranch?: string;
+    repoCredentialRef?: string;
     modelEndpoint?: string;
     modelName?: string;
+    members?: Array<{
+      openId: string;
+      displayName: string;
+      groupNickname?: string | null;
+      metadata?: Record<string, unknown>;
+    }>;
   }) {
     const normalized = {
       ...input,
@@ -34,8 +45,10 @@ export class ProjectService {
       createdBy: input.createdBy?.trim(),
       repoUrl: input.repoUrl?.trim(),
       repoBranch: input.repoBranch?.trim(),
+      repoCredentialRef: input.repoCredentialRef?.trim(),
       modelEndpoint: input.modelEndpoint?.trim(),
       modelName: input.modelName?.trim(),
+      members: input.members ?? [],
     };
 
     if (!normalized.name) throw new BadRequestException('Project name is required');
@@ -72,6 +85,7 @@ export class ProjectService {
       type: 'default',
       repoUrl: normalized.repoUrl,
       repoBranch: normalized.repoBranch ?? 'main',
+      repoCredentialRef: normalized.repoCredentialRef,
       modelEndpoint: normalized.modelEndpoint,
       modelName: normalized.modelName,
       createdBy: normalized.createdBy ?? normalized.ownerOpenId,
@@ -97,6 +111,28 @@ export class ProjectService {
       feishuChatId: normalized.feishuChatId,
       projectId: updatedProject.id,
       environmentId: environment.id,
+    });
+
+    await this.policies.ensureDefaultPolicy({
+      projectId: updatedProject.id,
+      feishuChatId: normalized.feishuChatId,
+      defaultEnvironmentId: environment.id,
+    });
+
+    await this.memberProfiles.syncChatMembers({
+      projectId: updatedProject.id,
+      feishuChatId: normalized.feishuChatId,
+      ownerOpenId: normalized.ownerOpenId,
+      members: normalized.members,
+    });
+
+    await this.createWorkspaceSkeleton({
+      projectName: normalized.name,
+      projectDescription: normalized.description,
+      docFolderToken: folder.token,
+      repoUrl: environment.repoUrl,
+      repoBranch: environment.repoBranch,
+      modelName: environment.modelName,
     });
 
     const createdTabs = await this.feishu
@@ -336,5 +372,62 @@ export class ProjectService {
       where: { id },
       data: { status: ProjectStatus.closed },
     });
+  }
+
+  private async createWorkspaceSkeleton(input: {
+    projectName: string;
+    projectDescription?: string;
+    docFolderToken?: string | null;
+    repoUrl?: string | null;
+    repoBranch?: string | null;
+    modelName?: string | null;
+  }) {
+    const docs = [
+      {
+        title: 'PROJECT.md',
+        content: [
+          `# ${input.projectName}`,
+          '',
+          input.projectDescription ?? '待补充项目描述。',
+          '',
+          '## 当前目标',
+          '- 明确项目范围、阶段目标与近期交付。',
+        ].join('\n'),
+      },
+      {
+        title: 'MEMBERS.md',
+        content: ['# Members', '', '待补充成员角色、职责与决策分工。'].join('\n'),
+      },
+      {
+        title: 'RULES.md',
+        content: ['# Rules', '', '- 高风险动作默认先确认。', '- 机器人默认只响应群内 @ 消息。'].join('\n'),
+      },
+      {
+        title: 'MEMORY.md',
+        content: ['# Memory', '', '记录长期有效的项目背景、约束与重要决定。'].join('\n'),
+      },
+      {
+        title: 'SKILLS.md',
+        content: ['# Skills', '', '列出当前允许机器人使用的主要技能与适用场景。'].join('\n'),
+      },
+      {
+        title: 'ENV.md',
+        content: [
+          '# Environment',
+          '',
+          `- Repo: ${input.repoUrl ?? '未配置'}`,
+          `- Branch: ${input.repoBranch ?? 'main'}`,
+          `- Model: ${input.modelName ?? '未配置'}`,
+        ].join('\n'),
+      },
+      {
+        title: 'TASKS.md',
+        content: ['# Tasks', '', '记录正式任务板之外的治理说明和任务同步约定。'].join('\n'),
+      },
+    ];
+
+    for (const doc of docs) {
+      await this.feishu.createDocument(doc.title, input.docFolderToken ?? undefined, doc.content).catch(() => null);
+    }
   }
 }

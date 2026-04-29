@@ -9,6 +9,8 @@ const config: Config = {
   },
   collectCoverageFrom: ['src/**/*.(t|j)s'],
   testEnvironment: 'node',
+  testPathIgnorePatterns: ['/node_modules/', '/demo/', '/dist/', '/dist_old/'],
+  modulePathIgnorePatterns: ['/demo/', '/dist/', '/dist_old/'],
 };
 
 export default config;

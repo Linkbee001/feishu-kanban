@@ -10,7 +10,7 @@ import { ARTIFACT_SYNC_QUEUE, PROJECT_DIGEST_QUEUE } from '../queue.constants';
 import { ProjectContextAssembler } from '../../modules/digest/project-context-assembler.service';
 import { ProjectDigestService } from '../../modules/digest/project-digest.service';
 
-type ScanJob = {};
+type ScanJob = Record<string, never>;
 type DigestJob = {
   sessionId: string;
   digestType: 'daily_status' | 'weekly_report_draft';

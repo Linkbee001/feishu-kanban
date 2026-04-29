@@ -4,11 +4,14 @@ import { ProjectService } from './project.service';
 import { AgentModule } from '../agent/agent.module';
 import { EnvironmentModule } from '../environment/environment.module';
 import { FeishuModule } from '../feishu/feishu.module';
+import { RepoModule } from '../repo/repo.module';
+import { GroupPolicyService } from './group-policy.service';
+import { ProjectMemberProfileService } from './project-member-profile.service';
 
 @Module({
-  imports: [EnvironmentModule, AgentModule, forwardRef(() => FeishuModule)],
+  imports: [EnvironmentModule, AgentModule, RepoModule, forwardRef(() => FeishuModule)],
   controllers: [ProjectController],
-  providers: [ProjectService],
-  exports: [ProjectService],
+  providers: [ProjectService, GroupPolicyService, ProjectMemberProfileService],
+  exports: [ProjectService, GroupPolicyService, ProjectMemberProfileService],
 })
 export class ProjectModule {}

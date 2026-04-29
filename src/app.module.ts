@@ -13,6 +13,8 @@ import { ArtifactModule } from './modules/artifact/artifact.module';
 import { ConfirmationModule } from './modules/confirmation/confirmation.module';
 import { ConversationModule } from './modules/conversation/conversation.module';
 import { DevModule } from './modules/dev/dev.module';
+import { RepoModule } from './modules/repo/repo.module';
+import { AdminModule } from './modules/admin/admin.module';
 import {
   AGENT_RUN_QUEUE,
   ARTIFACT_SYNC_QUEUE,
@@ -20,6 +22,7 @@ import {
   FEISHU_EVENT_QUEUE,
   NOTIFICATION_QUEUE,
   PROJECT_DIGEST_QUEUE,
+  REPO_SYNC_QUEUE,
 } from './queues/queue.constants';
 
 @Module({
@@ -36,6 +39,7 @@ import {
       { name: NOTIFICATION_QUEUE },
       { name: CLEANUP_QUEUE },
       { name: PROJECT_DIGEST_QUEUE },
+      { name: REPO_SYNC_QUEUE },
     ),
     PrismaModule,
     HealthModule,
@@ -47,6 +51,8 @@ import {
     ConfirmationModule,
     ConversationModule,
     DevModule,
+    RepoModule,
+    AdminModule,
   ],
 })
 export class AppModule implements NestModule {

@@ -121,6 +121,50 @@ export class FeishuProjectReader {
     return { entries, documents, truncated };
   }
 
+  async listProjectFolder(folderToken?: string | null) {
+    return this.scanProjectFolder(folderToken);
+  }
+
+  async readProjectDocument(token?: string | null, title?: string | null): Promise<FeishuDocumentSnapshot | null> {
+    if (!token?.trim()) {
+      return null;
+    }
+
+    try {
+      const raw = await this.feishu.getDocumentRawContent(token.trim());
+      const rawContent =
+        raw?.data?.content ??
+        raw?.data?.raw_content ??
+        raw?.data?.rawContent ??
+        '';
+      return {
+        token: token.trim(),
+        title: title?.trim() || token.trim(),
+        type: 'docx',
+        rawContent: rawContent.slice(0, 8_000),
+        summary: this.summarize(rawContent),
+        url: this.feishu.documentUrl(token.trim()),
+        updatedAt: null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async searchProjectDocuments(folderToken?: string | null, query?: string | null) {
+    const keyword = query?.trim().toLowerCase();
+    if (!folderToken || !keyword) {
+      return [];
+    }
+
+    const folder = await this.scanProjectFolder(folderToken);
+    return folder.documents.filter((doc) =>
+      [doc.title, doc.summary, doc.rawContent]
+        .filter((item): item is string => typeof item === 'string')
+        .some((item) => item.toLowerCase().includes(keyword)),
+    );
+  }
+
   async readBitableSnapshot(appToken?: string | null, tableId?: string | null): Promise<BitableSnapshot | null> {
     if (!appToken || !tableId) {
       return null;

@@ -11,15 +11,17 @@ import { ConversationModule } from '../conversation/conversation.module';
 import { EnvironmentModule } from '../environment/environment.module';
 import { ConfirmationModule } from '../confirmation/confirmation.module';
 import { ProjectModule } from '../project/project.module';
+import { RepoModule } from '../repo/repo.module';
 
 @Module({
   imports: [
     BullModule.registerQueue({ name: FEISHU_EVENT_QUEUE }),
-    AgentModule,
+    forwardRef(() => AgentModule),
     ConversationModule,
     EnvironmentModule,
     forwardRef(() => ConfirmationModule),
     forwardRef(() => ProjectModule),
+    RepoModule,
   ],
   controllers: [FeishuController],
   providers: [FeishuService, FeishuProjectReader, FeishuEventService, FeishuWsService],

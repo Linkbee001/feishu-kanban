@@ -6,10 +6,13 @@ import { FEISHU_EVENT_QUEUE } from '../../queues/queue.constants';
 import { AgentOutput } from '../agent/agent.types';
 import { AgentService } from '../agent/agent.service';
 import { GroupAgentSessionService } from '../agent/group-agent-session.service';
+import { GroupRuntimeService } from '../agent/group-runtime.service';
 import { PiMonoAdapter } from '../agent/pi-mono.adapter';
 import { ConfirmationService } from '../confirmation/confirmation.service';
 import { ConversationService } from '../conversation/conversation.service';
 import { EnvironmentService } from '../environment/environment.service';
+import { GroupPolicyService } from '../project/group-policy.service';
+import { ProjectMemberProfileService } from '../project/project-member-profile.service';
 import { ProjectService } from '../project/project.service';
 import { FeishuService } from './feishu.service';
 
@@ -37,9 +40,12 @@ export class FeishuEventService {
     private readonly prisma: PrismaService,
     private readonly agent: AgentService,
     private readonly groupSessions: GroupAgentSessionService,
+    private readonly groupRuntime: GroupRuntimeService,
     private readonly environments: EnvironmentService,
     private readonly piMono: PiMonoAdapter,
     private readonly projects: ProjectService,
+    private readonly policies: GroupPolicyService,
+    private readonly memberProfiles: ProjectMemberProfileService,
     private readonly conversations: ConversationService,
     private readonly confirmations: ConfirmationService,
     private readonly feishu: FeishuService,
@@ -59,7 +65,8 @@ export class FeishuEventService {
     const messageId = message?.message_id ?? eventId;
     const senderOpenId =
       payload?.event?.sender?.sender_id?.open_id ?? payload?.event?.operator?.open_id ?? 'unknown';
-    const rawText = this.extractText(message);
+    const parsedMessage = this.extractMessage(message);
+    const rawText = parsedMessage.rawText;
 
     const created = await this.prisma.feishuEventDedup
       .create({
@@ -115,7 +122,7 @@ export class FeishuEventService {
 
     if (!project) {
       if (sourceType === 'group') {
-        await this.handleUninitializedGroup(chatId, senderOpenId, rawText);
+        await this.handleUninitializedGroup(chatId, senderOpenId, rawText, traceId);
       } else {
         await this.feishu.sendTextMessage(
           replyTarget.receiveIdType,
@@ -126,7 +133,17 @@ export class FeishuEventService {
       return;
     }
 
-    const environment = await this.environments.getEffectiveEnvironment(project.id, chatId, senderOpenId);
+    const groupPolicy = sourceType === 'group' ? await this.policies.findByChat(chatId) : null;
+    if (sourceType === 'group' && groupPolicy && !groupPolicy.enabled) {
+      if (parsedMessage.isBotMentioned) {
+        await this.feishu.sendTextMessage('chat_id', chatId, '当前群机器人实例已被停用，请先在控制台重新启用。');
+      }
+      return;
+    }
+
+    const environment = groupPolicy?.defaultEnvironmentId
+      ? await this.environments.find(groupPolicy.defaultEnvironmentId)
+      : await this.environments.getEffectiveEnvironment(project.id, chatId, senderOpenId);
     const session = await this.groupSessions.getOrCreateSession(chatId, {
       projectId: project.id,
       environmentId: environment.id,
@@ -143,9 +160,37 @@ export class FeishuEventService {
         feishuMessageId: messageId,
         senderOpenId,
         rawText,
+        rawContentJson: parsedMessage.rawContentJson,
+        mentionsJson: parsedMessage.mentionsJson as any,
+        isBotMentioned: parsedMessage.isBotMentioned,
         traceId,
       },
     });
+    if (sourceType === 'group') {
+      await this.memberProfiles.touchMemberActivity({
+        projectId: project.id,
+        feishuChatId: chatId,
+        openId: senderOpenId,
+      });
+    }
+
+    if (sourceType === 'group') {
+      if (groupPolicy?.mentionOnly !== false && !parsedMessage.isBotMentioned) {
+        return;
+      }
+
+      await this.groupRuntime.handleMentionMessage({
+        projectId: project.id,
+        environmentId: environment.id,
+        feishuChatId: chatId,
+        messageSourceId: source.id,
+        feishuMessageId: messageId,
+        prompt: rawText,
+        senderOpenId,
+        traceId,
+      });
+      return;
+    }
 
     const submission = await this.agent.handleInteractiveGroupMessage({
       sessionId: session.id,
@@ -206,7 +251,7 @@ export class FeishuEventService {
     );
   }
 
-  private async handleUninitializedGroup(chatId: string, senderOpenId: string, rawText: string) {
+  private async handleUninitializedGroup(chatId: string, senderOpenId: string, rawText: string, traceId?: string) {
     const trimmed = rawText.trim();
     const session = await this.groupSessions.getOrCreateSession(chatId, {
       feishuChatId: chatId,
@@ -218,6 +263,8 @@ export class FeishuEventService {
       await this.feishu.sendTextMessage('chat_id', chatId, this.buildBusyReply());
       return;
     }
+
+    let resumeAfterInit: { projectId: string; environmentId: string; messageSourceId: string } | null = null;
 
     try {
       const existingDraft = this.groupSessions.getBootstrapDraft(session);
@@ -237,6 +284,7 @@ export class FeishuEventService {
       const mergedDraft = this.mergeProjectDraft(existingDraft, response.project ?? {});
 
       if (response.ready && mergedDraft.name) {
+        const members = await this.feishu.listChatMembers(chatId).catch(() => []);
         const project = await this.projects.initFromChat({
           name: mergedDraft.name,
           description: mergedDraft.description,
@@ -247,29 +295,64 @@ export class FeishuEventService {
           repoBranch: mergedDraft.repoBranch,
           modelEndpoint: mergedDraft.modelEndpoint,
           modelName: mergedDraft.modelName,
+          members,
         });
+        if (!project.defaultEnvironmentId) {
+          throw new Error(`Project ${project.id} has no default environment after initialization`);
+        }
         await this.groupSessions.bindProjectSession({
           sessionId: session.id,
           feishuChatId: chatId,
           projectId: project.id,
           environmentId: project.defaultEnvironmentId,
         });
+        const source = await this.prisma.messageSource.create({
+          data: {
+            projectId: project.id,
+            environmentId: project.defaultEnvironmentId,
+            sourceType: 'group',
+            feishuEventId: `${traceId ?? 'bootstrap'}:resume`,
+            feishuChatId: chatId,
+            feishuMessageId: `${traceId ?? 'bootstrap'}:resume`,
+            senderOpenId,
+            rawText,
+            isBotMentioned: true,
+            traceId: traceId ?? `tr_${Date.now()}`,
+          },
+        });
+        resumeAfterInit = {
+          projectId: project.id,
+          environmentId: project.defaultEnvironmentId,
+          messageSourceId: source.id,
+        };
         await this.feishu.sendTextMessage(
           'chat_id',
           chatId,
-          '项目资源已初始化完成。你现在可以继续直接提问；如果你希望我继续处理刚才那条需求，请再发一次。',
+          '项目资源已初始化完成，我会继续处理刚才那条需求。',
         );
-        return;
+      } else {
+        await this.groupSessions.updateBootstrapState(session.id, {
+          draft: mergedDraft,
+          summary: response.reply,
+          error: null,
+        });
+        await this.feishu.sendTextMessage('chat_id', chatId, this.composeInitReply(response.reply, mergedDraft));
       }
-
-      await this.groupSessions.updateBootstrapState(session.id, {
-        draft: mergedDraft,
-        summary: response.reply,
-        error: null,
-      });
-      await this.feishu.sendTextMessage('chat_id', chatId, this.composeInitReply(response.reply, mergedDraft));
     } finally {
       await this.groupSessions.releaseBootstrapLock(chatId, lockToken);
+    }
+
+    if (resumeAfterInit) {
+      await this.groupRuntime.handleMentionMessage({
+        projectId: resumeAfterInit.projectId,
+        environmentId: resumeAfterInit.environmentId,
+        feishuChatId: chatId,
+        messageSourceId: resumeAfterInit.messageSourceId,
+        feishuMessageId: null,
+        prompt: rawText,
+        senderOpenId,
+        traceId,
+      });
     }
   }
 
@@ -485,14 +568,68 @@ export class FeishuEventService {
     ].join('\n');
   }
 
-  private extractText(message: any) {
-    if (!message?.content) return '';
+  private extractMessage(message: any) {
+    if (!message?.content) {
+      return {
+        rawText: '',
+        rawContentJson: null,
+        mentionsJson: [],
+        isBotMentioned: false,
+      };
+    }
     try {
       const content = JSON.parse(message.content);
-      return content.text ?? content.title ?? JSON.stringify(content);
+      const mentions = this.collectMentions(message, content);
+      const rawText = content.text ?? content.title ?? JSON.stringify(content);
+      const fallbackMentioned = this.hasTextualBotMention(rawText);
+      return {
+        rawText,
+        rawContentJson: content,
+        mentionsJson: mentions,
+        isBotMentioned: this.hasBotMention(mentions) || (mentions.length === 0 && fallbackMentioned),
+      };
     } catch {
-      return String(message.content);
+      const rawText = String(message.content);
+      return {
+        rawText,
+        rawContentJson: null,
+        mentionsJson: [],
+        isBotMentioned: this.hasTextualBotMention(rawText),
+      };
     }
+  }
+
+  private collectMentions(message: any, content: any) {
+    const fromContent = Array.isArray(content?.mentions) ? content.mentions : [];
+    const fromMessage = Array.isArray(message?.mentions) ? message.mentions : [];
+    const merged = [...fromContent, ...fromMessage];
+    const deduped = new Map<string, { id?: string; name?: string; key?: string }>();
+    for (const item of merged) {
+      const mention = {
+        id: item?.id ?? item?.open_id ?? item?.user_id,
+        name: item?.name ?? item?.display_name ?? item?.tenant_name,
+        key: item?.key,
+        mentionedType: item?.mentioned_type ?? item?.type ?? null,
+      };
+      const dedupeKey = mention.key ?? mention.id ?? mention.name;
+      if (!dedupeKey) {
+        continue;
+      }
+      deduped.set(String(dedupeKey), mention);
+    }
+    return Array.from(deduped.values());
+  }
+
+  private hasTextualBotMention(rawText: string) {
+    const text = rawText.trim();
+    if (!text) {
+      return false;
+    }
+    return /^@_user_\d+\s+/i.test(text);
+  }
+
+  private hasBotMention(mentions: Array<Record<string, unknown>>) {
+    return mentions.some((item) => item.mentionedType === 'bot');
   }
 
   private buildBusyReply() {

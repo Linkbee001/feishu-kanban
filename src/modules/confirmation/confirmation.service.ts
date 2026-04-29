@@ -4,6 +4,7 @@ import { ConfirmationStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { assertConfirmationTransition } from '../../common/state/state-machine';
 import { AgentService } from '../agent/agent.service';
+import { GroupRuntimeService } from '../agent/group-runtime.service';
 import { ManagerConfirmationPayload } from '../agent/agent.types';
 import { GroupAgentSessionService } from '../agent/group-agent-session.service';
 import { FeishuService } from '../feishu/feishu.service';
@@ -14,6 +15,7 @@ export class ConfirmationService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly agent: AgentService,
+    @Inject(forwardRef(() => GroupRuntimeService)) private readonly groupRuntime: GroupRuntimeService,
     private readonly groupSessions: GroupAgentSessionService,
     @Inject(forwardRef(() => FeishuService)) private readonly feishu: FeishuService,
   ) {}
@@ -22,6 +24,7 @@ export class ConfirmationService {
     projectId?: string;
     environmentId?: string;
     messageSourceId: string;
+    groupRuntimeTaskId?: string;
     actionType: string;
     payload: unknown;
     chatId: string;
@@ -35,6 +38,7 @@ export class ConfirmationService {
         projectId: input.projectId,
         environmentId: input.environmentId,
         messageSourceId: input.messageSourceId,
+        groupRuntimeTaskId: input.groupRuntimeTaskId,
         actionType: input.actionType,
         payload: input.payload as any,
         expiresAt,
@@ -73,7 +77,13 @@ export class ConfirmationService {
 
     if (confirmation.projectId && confirmation.environmentId) {
       const payload = confirmation.payload as unknown as ManagerConfirmationPayload;
-      if (confirmation.messageSource.sourceType === 'group') {
+      if (confirmation.groupRuntimeTaskId) {
+        await this.groupRuntime.resumeFromConfirmation(id, {
+          confirmationId: id,
+          taskId: confirmation.groupRuntimeTaskId,
+          eventText: `Confirmation accepted for task ${confirmation.groupRuntimeTaskId}. Continue with the blocked task.`,
+        });
+      } else if (confirmation.messageSource.sourceType === 'group') {
         const session = await this.groupSessions.getOrCreateSession(confirmation.messageSource.feishuChatId, {
           projectId: confirmation.projectId,
           environmentId: confirmation.environmentId,
@@ -108,7 +118,7 @@ export class ConfirmationService {
   async reject(id: string, confirmedBy = 'admin') {
     const confirmation = await this.find(id);
     assertConfirmationTransition(confirmation.status, ConfirmationStatus.rejected);
-    return this.prisma.confirmationRequest.update({
+    const updated = await this.prisma.confirmationRequest.update({
       where: { id },
       data: {
         status: ConfirmationStatus.rejected,
@@ -116,6 +126,14 @@ export class ConfirmationService {
         decidedAt: new Date(),
       },
     });
+    if (confirmation.groupRuntimeTaskId) {
+      await this.groupRuntime.resumeFromConfirmation(id, {
+        confirmationId: id,
+        taskId: confirmation.groupRuntimeTaskId,
+        eventText: `Confirmation rejected for task ${confirmation.groupRuntimeTaskId}. Mark the task as canceled or revise it before continuing.`,
+      });
+    }
+    return updated;
   }
 
   async expire(id: string) {

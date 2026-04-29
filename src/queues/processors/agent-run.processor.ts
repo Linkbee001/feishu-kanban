@@ -8,6 +8,7 @@ import { AGENT_OUTPUT_SCHEMA } from '../../modules/agent/agent.schemas';
 import { GroupAgentSessionService } from '../../modules/agent/group-agent-session.service';
 import { PiMonoAdapter } from '../../modules/agent/pi-mono.adapter';
 import { ProjectRuntimeContextService } from '../../modules/agent/project-runtime-context.service';
+import { RepoSyncService } from '../../modules/repo/repo-sync.service';
 import { AGENT_RUN_QUEUE, ARTIFACT_SYNC_QUEUE } from '../queue.constants';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -22,6 +23,7 @@ export class AgentRunProcessor extends WorkerHost {
     private readonly groupSessions: GroupAgentSessionService,
     private readonly piMono: PiMonoAdapter,
     private readonly runtimeContext: ProjectRuntimeContextService,
+    private readonly repoSync: RepoSyncService,
     @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactQueue: Queue,
   ) {
     super();
@@ -48,9 +50,29 @@ export class AgentRunProcessor extends WorkerHost {
         await this.groupSessions.rehydrateSession(groupSession.feishuChatId);
       }
 
-      const projectContextBundle = await this.runtimeContext.assemble({
+      const repoSync = await this.repoSync.ensureRepoFresh({
         projectId: run.project.id,
         environmentId: run.environment.id,
+        repoUrl: run.environment.repoUrl,
+        repoBranch: run.environment.repoBranch,
+        repoCredentialRef: run.environment.repoCredentialRef,
+        force: true,
+      });
+      if (run.environment.repoUrl && repoSync.status !== 'ready') {
+        await this.agent.transition(run.id, AgentRunStatus.failed, {
+          finishedAt: new Date(),
+          errorCode: 'REPO_SYNC_FAILED',
+          errorMessage: repoSync.error ?? 'Repository mirror sync failed before formal execution.',
+        });
+        return;
+      }
+      const environment = await this.prisma.projectEnvironment.findUniqueOrThrow({
+        where: { id: run.environment.id },
+      });
+
+      const projectContextBundle = await this.runtimeContext.assemble({
+        projectId: run.project.id,
+        environmentId: environment.id,
         runtimeSessionKey:
           groupSession?.runtimeSessionKey ?? this.groupSessions.createRuntimeSessionKey(run.project.feishuChatId),
         sessionMode: groupSession?.sessionMode ?? 'active',
@@ -69,15 +91,20 @@ export class AgentRunProcessor extends WorkerHost {
         projectContextBundle,
         project: { id: run.project.id, name: run.project.name, feishuChatId: run.project.feishuChatId },
         environment: {
-          id: run.environment.id,
-          name: run.environment.name,
-          piMonoEnvId: run.environment.piMonoEnvId,
-          repoUrl: run.environment.repoUrl,
-          repoBranch: run.environment.repoBranch,
-          projectPath: run.environment.projectPath,
-          modelEndpoint: run.environment.modelEndpoint,
-          modelName: run.environment.modelName,
-          skillSet: run.environment.skillSet,
+          id: environment.id,
+          name: environment.name,
+          piMonoEnvId: environment.piMonoEnvId,
+          repoUrl: environment.repoUrl,
+          repoBranch: environment.repoBranch,
+          repoCredentialRef: environment.repoCredentialRef,
+          repoMirrorPath: environment.repoMirrorPath,
+          repoSyncStatus: environment.repoSyncStatus,
+          repoSyncError: environment.repoSyncError,
+          repoHeadRef: environment.repoHeadRef,
+          projectPath: environment.projectPath,
+          modelEndpoint: environment.modelEndpoint,
+          modelName: environment.modelName,
+          skillSet: environment.skillSet,
         },
         source: {
           messageSourceId: run.messageSourceId,

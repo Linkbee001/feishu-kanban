@@ -48,6 +48,7 @@ export class ArtifactService {
         projectId: run.projectId,
         environmentId: run.environmentId,
         agentRunId: run.id,
+        groupRuntimeTaskId: run.groupRuntimeTaskId,
         messageSourceId: run.messageSourceId,
         type,
         title: output.title,

@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { EnvironmentStatus, EnvironmentType, RepoAccessMode } from '@prisma/client';
+import { EnvironmentStatus, EnvironmentType, RepoAccessMode, RepoSyncStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { RepoSyncQueueService } from '../repo/repo-sync-queue.service';
 
 @Injectable()
 export class EnvironmentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly repoSyncQueue: RepoSyncQueueService,
+  ) {}
 
   async create(projectId: string, input: {
     name: string;
@@ -12,6 +16,7 @@ export class EnvironmentService {
     piMonoEnvId?: string;
     repoUrl?: string;
     repoBranch?: string;
+    repoCredentialRef?: string;
     repoAccessMode?: RepoAccessMode | string;
     projectPath?: string;
     modelEndpoint?: string;
@@ -32,7 +37,9 @@ export class EnvironmentService {
         piMonoEnvId: input.piMonoEnvId,
         repoUrl: input.repoUrl,
         repoBranch: input.repoBranch,
+        repoCredentialRef: input.repoCredentialRef,
         repoAccessMode: (input.repoAccessMode as RepoAccessMode) ?? RepoAccessMode.readonly,
+        repoSyncStatus: input.repoUrl ? RepoSyncStatus.uninitialized : RepoSyncStatus.uninitialized,
         projectPath: input.projectPath,
         modelEndpoint: input.modelEndpoint,
         modelName: input.modelName,
@@ -44,6 +51,9 @@ export class EnvironmentService {
         lastActiveAt: new Date(),
       },
     });
+    if (input.repoUrl) {
+      await this.repoSyncQueue.enqueueSync(projectId, environment.id, false);
+    }
     if (input.setDefault) await this.setDefault(projectId, environment.id);
     return environment;
   }
@@ -60,7 +70,39 @@ export class EnvironmentService {
 
   async update(id: string, data: any) {
     await this.find(id);
-    return this.prisma.projectEnvironment.update({ where: { id }, data });
+    const repoConfigChanged =
+      data.repoUrl !== undefined ||
+      data.repoBranch !== undefined ||
+      data.repoCredentialRef !== undefined;
+    const updated = await this.prisma.projectEnvironment.update({
+      where: { id },
+      data: repoConfigChanged
+        ? {
+            ...data,
+            repoSyncStatus: RepoSyncStatus.uninitialized,
+            repoSyncError: null,
+            lastRepoSyncAt: null,
+            repoHeadRef: null,
+            repoMirrorPath: null,
+          }
+        : data,
+    });
+    if (repoConfigChanged && updated.repoUrl) {
+      await this.repoSyncQueue.enqueueSync(updated.projectId, updated.id, false);
+    }
+    if (repoConfigChanged && !updated.repoUrl) {
+      await this.prisma.projectEnvironment.update({
+        where: { id: updated.id },
+        data: {
+          repoSyncStatus: RepoSyncStatus.uninitialized,
+          repoMirrorPath: null,
+          repoSyncError: null,
+          lastRepoSyncAt: null,
+          repoHeadRef: null,
+        },
+      });
+    }
+    return this.find(id);
   }
 
   async setDefault(projectId: string, environmentId: string) {

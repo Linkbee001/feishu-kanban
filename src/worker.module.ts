@@ -11,14 +11,17 @@ import { AgentRunProcessor } from './queues/processors/agent-run.processor';
 import { ArtifactSyncProcessor } from './queues/processors/artifact-sync.processor';
 import { CleanupProcessor } from './queues/processors/cleanup.processor';
 import { ProjectDigestProcessor } from './queues/processors/project-digest.processor';
+import { RepoSyncProcessor } from './queues/processors/repo-sync.processor';
 import {
   AGENT_RUN_QUEUE,
   ARTIFACT_SYNC_QUEUE,
   CLEANUP_QUEUE,
   FEISHU_EVENT_QUEUE,
   PROJECT_DIGEST_QUEUE,
+  REPO_SYNC_QUEUE,
 } from './queues/queue.constants';
 import { DigestModule } from './modules/digest/digest.module';
+import { RepoModule } from './modules/repo/repo.module';
 
 @Module({
   imports: [
@@ -29,12 +32,14 @@ import { DigestModule } from './modules/digest/digest.module';
       { name: ARTIFACT_SYNC_QUEUE },
       { name: CLEANUP_QUEUE },
       { name: PROJECT_DIGEST_QUEUE },
+      { name: REPO_SYNC_QUEUE },
     ),
     FeishuModule,
     AgentModule,
     ArtifactModule,
     ConversationModule,
     DigestModule,
+    RepoModule,
   ],
   providers: [
     FeishuEventProcessor,
@@ -43,6 +48,7 @@ import { DigestModule } from './modules/digest/digest.module';
     ArtifactSyncProcessor,
     CleanupProcessor,
     ProjectDigestProcessor,
+    RepoSyncProcessor,
   ],
 })
 export class WorkerModule {}

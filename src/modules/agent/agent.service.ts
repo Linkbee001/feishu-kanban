@@ -14,6 +14,7 @@ import {
 } from './agent.types';
 import { PiMonoAdapter } from './pi-mono.adapter';
 import { ProjectRuntimeContextService } from './project-runtime-context.service';
+import { RepoSyncService } from '../repo/repo-sync.service';
 
 @Injectable()
 export class AgentService {
@@ -22,6 +23,7 @@ export class AgentService {
     private readonly groupSessions: GroupAgentSessionService,
     private readonly piMono: PiMonoAdapter,
     private readonly runtimeContext: ProjectRuntimeContextService,
+    private readonly repoSync: RepoSyncService,
     @InjectQueue(AGENT_RUN_QUEUE) private readonly agentRunQueue: Queue,
     @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactSyncQueue: Queue,
   ) {}
@@ -68,6 +70,14 @@ export class AgentService {
 
     const project = await this.prisma.project.findUnique({ where: { id: input.projectId } });
     const environment = await this.prisma.projectEnvironment.findUnique({ where: { id: input.environmentId } });
+    const groupPolicy = await this.prisma.groupPolicy.findFirst({
+      where: {
+        projectId: input.projectId,
+        feishuChatId: input.feishuChatId,
+        archivedAt: null,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
     if (!project || !environment) {
       return { status: 'failed', reason: 'Invalid project or environment' };
     }
@@ -83,9 +93,22 @@ export class AgentService {
 
     let retainLock = false;
     try {
-      const projectContextBundle = await this.runtimeContext.assemble({
+      const interactiveRepoRefresh = await this.repoSync.maybeRefreshForInteractive({
         projectId: project.id,
         environmentId: environment.id,
+        repoUrl: environment.repoUrl,
+        repoBranch: environment.repoBranch,
+        repoCredentialRef: environment.repoCredentialRef,
+        lastRepoSyncAt: environment.lastRepoSyncAt,
+        repoSyncStatus: environment.repoSyncStatus,
+      });
+      const refreshedEnvironment =
+        interactiveRepoRefresh.attempted || environment.repoMirrorPath === null
+          ? await this.prisma.projectEnvironment.findUniqueOrThrow({ where: { id: environment.id } })
+          : environment;
+      const projectContextBundle = await this.runtimeContext.assemble({
+        projectId: project.id,
+        environmentId: refreshedEnvironment.id,
         runtimeSessionKey: session.runtimeSessionKey,
         sessionMode: session.sessionMode,
         sessionStatus: this.runtimeContext.toSessionStatus(session.status),
@@ -100,22 +123,31 @@ export class AgentService {
         projectContextBundle,
         project: { id: project.id, name: project.name, feishuChatId: project.feishuChatId },
         environment: {
-          id: environment.id,
-          name: environment.name,
-          piMonoEnvId: environment.piMonoEnvId,
-          repoUrl: environment.repoUrl,
-          repoBranch: environment.repoBranch,
-          projectPath: environment.projectPath,
-          modelEndpoint: environment.modelEndpoint,
-          modelName: environment.modelName,
-          skillSet: environment.skillSet,
+          id: refreshedEnvironment.id,
+          name: refreshedEnvironment.name,
+          piMonoEnvId: refreshedEnvironment.piMonoEnvId,
+          repoUrl: refreshedEnvironment.repoUrl,
+          repoBranch: refreshedEnvironment.repoBranch,
+          repoCredentialRef: refreshedEnvironment.repoCredentialRef,
+          repoMirrorPath: refreshedEnvironment.repoMirrorPath,
+          repoSyncStatus: refreshedEnvironment.repoSyncStatus,
+          repoSyncError: refreshedEnvironment.repoSyncError,
+          repoHeadRef: refreshedEnvironment.repoHeadRef,
+          projectPath: refreshedEnvironment.projectPath,
+          modelEndpoint: refreshedEnvironment.modelEndpoint,
+          modelName: refreshedEnvironment.modelName,
+          skillSet: refreshedEnvironment.skillSet,
         },
         source: {
           messageSourceId: input.messageSourceId,
           senderOpenId: input.senderOpenId ?? null,
           traceId: input.traceId ?? null,
         },
-        prompt: this.buildInteractivePrompt(input.prompt, projectContextBundle.session.memorySummary ?? session.memorySummary ?? null),
+        prompt: this.buildInteractivePrompt({
+          rawText: input.prompt,
+          memorySummary: projectContextBundle.session.memorySummary ?? session.memorySummary ?? null,
+          environment: refreshedEnvironment,
+        }),
       });
 
       await this.syncSessionSnapshot(session.id, session.runtimeSessionKey);
@@ -126,6 +158,33 @@ export class AgentService {
           session: { id: session.id, runtimeSessionKey: session.runtimeSessionKey },
           decision,
           reply: decision.reply,
+        };
+      }
+
+      const allowedSkills = Array.isArray(groupPolicy?.allowedSkillsJson)
+        ? groupPolicy!.allowedSkillsJson.map((item) => String(item))
+        : [];
+      if (decision.skillHint && allowedSkills.length && !allowedSkills.includes(decision.skillHint)) {
+        return {
+          status: 'followup',
+          session: { id: session.id, runtimeSessionKey: session.runtimeSessionKey },
+          decision,
+          reply: `当前群策略未启用技能 ${decision.skillHint}，请先在控制台调整策略后再执行。`,
+        };
+      }
+
+      if (
+        decision.action === 'execute' &&
+        groupPolicy?.highRiskActionsRequireConfirmation &&
+        this.requiresPolicyConfirmation(decision)
+      ) {
+        return {
+          status: 'confirmation_requested',
+          session: { id: session.id, runtimeSessionKey: session.runtimeSessionKey },
+          decision,
+          reply: `${decision.reply}\n\n根据当前群策略，这类高风险动作需要先确认。`,
+          actionType: decision.intent,
+          confirmationPayload: this.toConfirmationPayload(input.prompt, decision),
         };
       }
 
@@ -143,7 +202,7 @@ export class AgentService {
       const queued = await this.queueGroupExecution({
         session,
         project,
-        environment,
+        environment: refreshedEnvironment,
         lockToken,
         messageSourceId: input.messageSourceId,
         prompt: this.buildExecutionPrompt(input.prompt, decision),
@@ -338,13 +397,26 @@ export class AgentService {
     });
   }
 
-  private buildInteractivePrompt(rawText: string, memorySummary?: string | null) {
+  private buildInteractivePrompt(input: {
+    rawText: string;
+    memorySummary?: string | null;
+    environment: {
+      repoMirrorPath?: string | null;
+      repoSyncStatus?: string | null;
+      repoSyncError?: string | null;
+      repoHeadRef?: string | null;
+    };
+  }) {
     return [
       'This is an interactive manager decision turn for a Feishu project workspace.',
       'Decide whether to ask a follow-up question, request confirmation, or execute immediately.',
       'If the request is ambiguous or missing key constraints, prefer ask_followup.',
-      memorySummary ? `Session memory summary: ${memorySummary}` : 'Session memory summary: none',
-      `Latest user message: ${rawText}`,
+      input.memorySummary ? `Session memory summary: ${input.memorySummary}` : 'Session memory summary: none',
+      `Repo mirror path: ${input.environment.repoMirrorPath ?? 'not prepared'}`,
+      `Repo sync status: ${input.environment.repoSyncStatus ?? 'unknown'}`,
+      `Repo head: ${input.environment.repoHeadRef ?? 'unknown'}`,
+      input.environment.repoSyncError ? `Repo sync error: ${input.environment.repoSyncError}` : 'Repo sync error: none',
+      `Latest user message: ${input.rawText}`,
     ].join('\n');
   }
 
@@ -376,5 +448,18 @@ export class AgentService {
         originalUserMessage: rawText,
       },
     };
+  }
+
+  private requiresPolicyConfirmation(decision: ManagerInteractiveDecision) {
+    if (decision.intent === 'environment_switch') {
+      return true;
+    }
+    if (decision.outputMode === 'task') {
+      return true;
+    }
+    if (decision.targetChannels?.includes('bitable')) {
+      return true;
+    }
+    return Boolean(decision.metadata?.requiresConfirmation === true);
   }
 }

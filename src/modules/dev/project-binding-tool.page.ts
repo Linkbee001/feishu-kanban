@@ -818,6 +818,11 @@ export function renderProjectBindingToolPage() {
                   </label>
                 </div>
 
+                <label>
+                  Repo Credential Ref
+                  <input id="repoCredentialRef" placeholder="例如 github-prod" />
+                </label>
+
                 <div class="button-row">
                   <button class="secondary" id="checkBinding">先查当前群绑定</button>
                   <button class="secondary" id="seedProject">开发态 Seed 最小现场</button>
@@ -1004,6 +1009,7 @@ export function renderProjectBindingToolPage() {
       description: $('description'),
       repoUrl: $('repoUrl'),
       repoBranch: $('repoBranch'),
+      repoCredentialRef: $('repoCredentialRef'),
       resourceType: $('resourceType'),
       resourceId: $('resourceId'),
       resourceAppToken: $('resourceAppToken'),
@@ -1136,6 +1142,7 @@ export function renderProjectBindingToolPage() {
         createdBy: fields.ownerOpenId.value.trim(),
         repoUrl: fields.repoUrl.value.trim(),
         repoBranch: fields.repoBranch.value.trim() || 'main',
+        repoCredentialRef: fields.repoCredentialRef.value.trim() || undefined,
       };
     }
 

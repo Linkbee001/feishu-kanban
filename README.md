@@ -47,13 +47,7 @@ npm run worker:dev
 
 ## pi mono 集成
 
-本项目通过 `@mariozechner/pi-coding-agent` 集成 `badlogic/pi-mono` 的 coding agent。worker 会在本地启动：
-
-```bash
-pi --mode rpc --no-session
-```
-
-也就是后端不再访问 `PI_MONO_BASE_URL`，而是通过官方 RPC JSONL 协议和 pi 子进程通信。
+本项目通过 `@mariozechner/pi-coding-agent` 的 SDK 直接集成 `badlogic/pi-mono`。worker 使用 SDK session 管理、rehydrate、memory 和结构化工具，不再依赖 `pi --mode rpc` CLI fallback。
 
 常用配置：
 
@@ -66,8 +60,6 @@ PI_MONO_AGENT_DIR=/workspace/.pi-agent
 BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 DASHSCOPE_API_KEY=sk-...
 ```
-
-如果你想覆盖启动命令，可设置 `PI_MONO_COMMAND`，例如指向自定义 wrapper。
 
 当 `PI_MONO_PROVIDER=bailian` 时，后端会在 pi 启动前自动写入 `${PI_MONO_AGENT_DIR}/models.json`，注册百炼 OpenAI 兼容 provider：
 

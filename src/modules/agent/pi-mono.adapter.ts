@@ -4,13 +4,22 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import Redis from 'ioredis';
 import * as path from 'path';
 import type { AgentSession, ModelRegistry, SessionManager } from '@mariozechner/pi-coding-agent';
+import { PrismaService } from '../../common/prisma/prisma.service';
+import { FeishuProjectReader } from '../feishu/feishu-project-reader.service';
 import { GROUP_AGENT_SESSION_REDIS } from './agent.constants';
 import {
   AgentOutput,
+  CompiledRoleProfile,
+  GroupRuntimeAction,
+  GroupRuntimeConfirmationAction,
+  GroupRuntimeTaskSnapshot,
+  GroupRuntimeTodoWriteAction,
+  GroupRuntimeTurnResult,
   ManagerInteractiveDecision,
   PiMonoCreateRunRequest,
   PiMonoExecutionResult,
   PiMonoSessionSnapshot,
+  ProjectContextBundle,
 } from './agent.types';
 import { MANAGER_INTERACTIVE_DECISION_SCHEMA } from './agent.schemas';
 import { resolveBundledPiSkillsDir } from './pi-skill-mapping';
@@ -25,13 +34,18 @@ type SessionRuntimeState = {
   sessionStoreRef?: string;
   lastAssistantText?: string;
   activeExecution?: ActiveExecutionState;
+  currentProjectContextBundle?: ProjectContextBundle;
+  currentRoleProfile?: CompiledRoleProfile;
+  currentRuntimeTasks?: GroupRuntimeTaskSnapshot[];
+  toolCache: Map<string, unknown>;
 };
 
 type ActiveExecutionState = {
   runId?: string;
-  mode: 'outputs' | 'decision';
+  mode: 'outputs' | 'decision' | 'group_runtime';
   outputs: AgentOutput[];
   decision?: ManagerInteractiveDecision;
+  actions?: GroupRuntimeAction[];
   emitted: boolean;
   canceled: boolean;
   timedOut: boolean;
@@ -43,6 +57,46 @@ type EmitOutputsArgs = {
 
 type EmitDecisionArgs = {
   decision?: unknown;
+};
+
+type ReadProjectDocArgs = {
+  token?: string;
+  title?: string;
+};
+
+type SearchProjectDocsArgs = {
+  query?: string;
+};
+
+type ListRecentArtifactsArgs = {
+  limit?: number;
+};
+
+type TodoListArgs = Record<string, never>;
+
+type TodoWriteArgs = {
+  action?: unknown;
+  taskId?: unknown;
+  title?: unknown;
+  description?: unknown;
+  intent?: unknown;
+  skillHint?: unknown;
+  outputMode?: unknown;
+  taskPayload?: unknown;
+  resultSummary?: unknown;
+  errorMessage?: unknown;
+};
+
+type ReplyGroupArgs = {
+  text?: unknown;
+};
+
+type RequestGroupConfirmationArgs = {
+  taskId?: unknown;
+  actionType?: unknown;
+  summary?: unknown;
+  detail?: unknown;
+  payload?: unknown;
 };
 
 const nativeDynamicImport = new Function('specifier', 'return import(specifier)') as <T>(specifier: string) => Promise<T>;
@@ -65,6 +119,8 @@ export class PiMonoAdapter {
 
   constructor(
     private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+    private readonly feishuReader: FeishuProjectReader,
     @Inject(GROUP_AGENT_SESSION_REDIS) private readonly redis: Redis,
   ) {}
 
@@ -166,6 +222,45 @@ export class PiMonoAdapter {
     throw new BadGatewayException('pi mono bootstrap run was canceled');
   }
 
+  async runGroupRuntimeTurn(input: {
+    runtimeSessionKey: string;
+    agentScopeKey?: string;
+    sessionStoreRef?: string | null;
+    sessionMode?: 'bootstrap' | 'active' | 'disabled';
+    projectContextBundle?: PiMonoCreateRunRequest['projectContextBundle'];
+    runtimeTasks?: GroupRuntimeTaskSnapshot[];
+    roleProfile?: CompiledRoleProfile;
+    project: PiMonoCreateRunRequest['project'];
+    environment: PiMonoCreateRunRequest['environment'];
+    source: PiMonoCreateRunRequest['source'];
+    prompt: string;
+    timeoutMs?: number;
+    requestKind?: 'group_runtime';
+    outputSchema?: unknown;
+  }): Promise<GroupRuntimeTurnResult> {
+    return this.executeGroupRuntimePrompt({
+      payload: {
+        runtimeSessionKey: input.runtimeSessionKey,
+        sessionStoreRef: input.sessionStoreRef ?? null,
+        agentScopeKey: input.agentScopeKey,
+        sessionMode: input.sessionMode ?? 'active',
+        requestKind: 'group_runtime',
+        wakeMode: 'interactive',
+        projectContextBundle: input.projectContextBundle,
+        runtimeTasks: input.runtimeTasks ?? [],
+        roleProfile: input.roleProfile,
+        project: input.project,
+        environment: input.environment,
+        source: input.source,
+        intent: 'requirement_analysis',
+        skillName: null,
+        prompt: input.prompt,
+        outputSchema: input.outputSchema ?? {},
+      },
+      timeoutMs: input.timeoutMs ?? 60_000,
+    });
+  }
+
   async cancelRun(runId: string): Promise<void> {
     await this.redis.set(this.cancelKey(runId), '1', 'EX', this.cancelTtlSeconds());
 
@@ -220,6 +315,8 @@ export class PiMonoAdapter {
     const state = await this.ensureSession({
       runtimeSessionKey: input.payload.runtimeSessionKey,
       sessionStoreRef: input.payload.sessionStoreRef,
+      repoMirrorPath: input.payload.environment.repoMirrorPath,
+      repoSyncStatus: input.payload.environment.repoSyncStatus,
       projectPath: input.payload.environment.projectPath,
     });
     const execution: ActiveExecutionState = {
@@ -231,6 +328,7 @@ export class PiMonoAdapter {
       timedOut: false,
     };
     state.activeExecution = execution;
+    state.currentProjectContextBundle = input.payload.projectContextBundle;
 
     let cancelWatcher: NodeJS.Timeout | undefined;
     let timeoutHandle: NodeJS.Timeout | undefined;
@@ -308,6 +406,7 @@ export class PiMonoAdapter {
       }
       state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
       state.activeExecution = undefined;
+      state.currentProjectContextBundle = undefined;
     }
   }
 
@@ -318,6 +417,8 @@ export class PiMonoAdapter {
     const state = await this.ensureSession({
       runtimeSessionKey: input.payload.runtimeSessionKey,
       sessionStoreRef: input.payload.sessionStoreRef,
+      repoMirrorPath: input.payload.environment.repoMirrorPath,
+      repoSyncStatus: input.payload.environment.repoSyncStatus,
       projectPath: input.payload.environment.projectPath,
     });
     const execution: ActiveExecutionState = {
@@ -328,6 +429,7 @@ export class PiMonoAdapter {
       timedOut: false,
     };
     state.activeExecution = execution;
+    state.currentProjectContextBundle = input.payload.projectContextBundle;
 
     let timeoutHandle: NodeJS.Timeout | undefined;
 
@@ -386,20 +488,121 @@ export class PiMonoAdapter {
       }
       state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
       state.activeExecution = undefined;
+      state.currentProjectContextBundle = undefined;
+    }
+  }
+
+  private async executeGroupRuntimePrompt(input: {
+    payload: PiMonoCreateRunRequest;
+    timeoutMs: number;
+  }): Promise<GroupRuntimeTurnResult> {
+    const state = await this.ensureSession({
+      runtimeSessionKey: input.payload.runtimeSessionKey,
+      sessionStoreRef: input.payload.sessionStoreRef,
+      repoMirrorPath: input.payload.environment.repoMirrorPath,
+      repoSyncStatus: input.payload.environment.repoSyncStatus,
+      projectPath: input.payload.environment.projectPath,
+      roleProfile: input.payload.roleProfile,
+    });
+    const execution: ActiveExecutionState = {
+      mode: 'group_runtime',
+      outputs: [],
+      actions: [],
+      emitted: false,
+      canceled: false,
+      timedOut: false,
+    };
+    state.activeExecution = execution;
+    state.currentProjectContextBundle = input.payload.projectContextBundle;
+    state.currentRoleProfile = input.payload.roleProfile;
+    state.currentRuntimeTasks = input.payload.runtimeTasks ?? [];
+
+    let timeoutHandle: NodeJS.Timeout | undefined;
+
+    try {
+      timeoutHandle = setTimeout(() => {
+        execution.timedOut = true;
+        void state.session.abort().catch((error) => {
+          this.logger.warn(
+            `Failed to abort timed out pi mono session ${state.runtimeSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      }, input.timeoutMs);
+
+      await state.session.prompt(this.buildPrompt(input.payload));
+
+      const lastAssistantText = state.session.getLastAssistantText()?.trim();
+      state.lastAssistantText = lastAssistantText;
+
+      if (execution.timedOut) {
+        throw new PiMonoExecutionAbortError('TIMEOUT', 'pi mono group runtime turn timed out');
+      }
+      if (execution.canceled) {
+        throw new PiMonoExecutionAbortError('CANCELED', 'pi mono group runtime turn canceled');
+      }
+
+      return {
+        status: 'succeeded',
+        actions: execution.actions ?? [],
+        outputs: execution.outputs,
+        outputSummary: execution.outputs.length ? this.buildOutputSummary(execution.outputs) : undefined,
+        session: this.buildSessionSnapshot(state, execution.outputs, lastAssistantText),
+      };
+    } catch (error) {
+      const lastAssistantText = state.session.getLastAssistantText()?.trim();
+      state.lastAssistantText = lastAssistantText;
+
+      if (execution.timedOut || (error instanceof PiMonoExecutionAbortError && error.code === 'TIMEOUT')) {
+        return {
+          status: 'timeout',
+          actions: execution.actions ?? [],
+          outputs: execution.outputs,
+          session: this.buildSessionSnapshot(state, execution.outputs, lastAssistantText),
+        };
+      }
+
+      if (execution.canceled || (error instanceof PiMonoExecutionAbortError && error.code === 'CANCELED')) {
+        return {
+          status: 'canceled',
+          actions: execution.actions ?? [],
+          outputs: execution.outputs,
+          session: this.buildSessionSnapshot(state, execution.outputs, lastAssistantText),
+        };
+      }
+
+      throw error;
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
+      state.activeExecution = undefined;
+      state.currentProjectContextBundle = undefined;
+      state.currentRuntimeTasks = undefined;
+      state.currentRoleProfile = undefined;
     }
   }
 
   private async ensureSession(input: {
     runtimeSessionKey: string;
     sessionStoreRef?: string | null;
+    repoMirrorPath?: string | null;
+    repoSyncStatus?: string | null;
     projectPath?: string | null;
+    roleProfile?: CompiledRoleProfile;
   }): Promise<SessionRuntimeState> {
     const normalizedStoreRef = input.sessionStoreRef ? path.resolve(input.sessionStoreRef) : undefined;
-    const cwd = this.resolveCwd(input.projectPath);
+    const cwd = this.resolveCwd({
+      repoMirrorPath: input.repoMirrorPath,
+      repoSyncStatus: input.repoSyncStatus,
+      projectPath: input.projectPath,
+    });
     const cached = this.sessions.get(input.runtimeSessionKey);
     if (
       cached &&
       cached.cwd === cwd &&
+      (input.roleProfile?.compiledContextFile ?? cached.currentRoleProfile?.compiledContextFile ?? '') ===
+        (cached.currentRoleProfile?.compiledContextFile ?? input.roleProfile?.compiledContextFile ?? '') &&
       (!normalizedStoreRef ||
         !cached.sessionStoreRef ||
         path.resolve(cached.sessionStoreRef) === normalizedStoreRef)
@@ -433,6 +636,17 @@ export class PiMonoAdapter {
           cwd,
           agentDir,
           additionalSkillPaths: [resolveBundledPiSkillsDir()],
+          agentsFilesOverride: (current: { agentsFiles: Array<{ path: string; content: string }> }) => ({
+            agentsFiles: input.roleProfile
+              ? [
+                  ...current.agentsFiles,
+                  {
+                    path: '/virtual/AGENTS.md',
+                    content: input.roleProfile.compiledContextFile,
+                  },
+                ]
+              : current.agentsFiles,
+          }),
         })
       : undefined;
     if (resourceLoader) {
@@ -447,8 +661,25 @@ export class PiMonoAdapter {
       sessionStoreRef: sessionManager.getSessionFile() ?? normalizedStoreRef,
       lastAssistantText: undefined,
       activeExecution: undefined,
+      currentProjectContextBundle: undefined,
+      currentRoleProfile: input.roleProfile,
+      currentRuntimeTasks: undefined,
+      toolCache: new Map<string, unknown>(),
     };
 
+    const customTools = [
+      this.createEmitOutputsTool(state),
+      this.createEmitDecisionTool(state),
+      this.createListProjectFolderTool(state),
+      this.createReadProjectDocTool(state),
+      this.createSearchProjectDocsTool(state),
+      this.createReadProjectBitableTool(state),
+      this.createListRecentProjectArtifactsTool(state),
+      this.createTodoListTool(state),
+      this.createTodoWriteTool(state),
+      this.createReplyGroupTool(state),
+      this.createRequestGroupConfirmationTool(state),
+    ];
     const sessionOptions: any = {
       cwd,
       agentDir,
@@ -458,8 +689,24 @@ export class PiMonoAdapter {
       thinkingLevel: this.resolveThinkingLevel(),
       sessionManager,
       ...(resourceLoader ? { resourceLoader } : {}),
-      tools: ['read', 'grep', 'find', 'ls', 'emit_outputs', 'emit_decision'],
-      customTools: [this.createEmitOutputsTool(state), this.createEmitDecisionTool(state)],
+      tools: [
+        'read',
+        'grep',
+        'find',
+        'ls',
+        'emit_outputs',
+        'emit_decision',
+        'list_project_folder',
+        'read_project_doc',
+        'search_project_docs',
+        'read_project_bitable',
+        'list_recent_project_artifacts',
+        'todo_list',
+        'todo_write',
+        'reply_group',
+        'request_group_confirmation',
+      ],
+      customTools,
     };
 
     const { session } = await sdk.createAgentSession(sessionOptions);
@@ -511,8 +758,8 @@ export class PiMonoAdapter {
         if (!activeExecution) {
           throw new Error('emit_outputs called outside an active execution');
         }
-        if (activeExecution.mode !== 'outputs') {
-          throw new Error('emit_outputs is only available during formal execution');
+        if (!['outputs', 'group_runtime'].includes(activeExecution.mode)) {
+          throw new Error('emit_outputs is only available during formal execution or group runtime turns');
         }
 
         const outputs = this.normalizeOutputs(params.outputs);
@@ -570,6 +817,303 @@ export class PiMonoAdapter {
     } as any;
   }
 
+  private createListProjectFolderTool(state: SessionRuntimeState) {
+    return {
+      name: 'list_project_folder',
+      label: 'list_project_folder',
+      description: 'List the Feishu project folder structure and recent readable documents.',
+      promptSnippet: 'list_project_folder(): inspect project folder entries and recent docs from Feishu.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      } as any,
+      execute: async () => {
+        const context = this.requireProjectContextBundle(state);
+        const cacheKey = `folder:${context.project.docFolderToken ?? 'none'}`;
+        const result = await this.getOrLoadCachedToolResult(state, cacheKey, async () =>
+          this.feishuReader.listProjectFolder(context.project.docFolderToken),
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+        };
+      },
+    } as any;
+  }
+
+  private createReadProjectDocTool(_state: SessionRuntimeState) {
+    return {
+      name: 'read_project_doc',
+      label: 'read_project_doc',
+      description: 'Read a Feishu project document by token and return raw content summary.',
+      promptSnippet: 'read_project_doc({ token, title }): fetch a specific project document.',
+      parameters: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+          title: { type: 'string' },
+        },
+        required: ['token'],
+        additionalProperties: false,
+      } as any,
+      execute: async (_toolCallId: string, params: ReadProjectDocArgs) => {
+        const doc = await this.feishuReader.readProjectDocument(params.token, params.title);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(doc) }],
+        };
+      },
+    } as any;
+  }
+
+  private createSearchProjectDocsTool(state: SessionRuntimeState) {
+    return {
+      name: 'search_project_docs',
+      label: 'search_project_docs',
+      description: 'Search recent Feishu project documents by keyword.',
+      promptSnippet: 'search_project_docs({ query }): search recent project docs from Feishu.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      } as any,
+      execute: async (_toolCallId: string, params: SearchProjectDocsArgs) => {
+        const context = this.requireProjectContextBundle(state);
+        const result = await this.feishuReader.searchProjectDocuments(
+          context.project.docFolderToken,
+          params.query,
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+        };
+      },
+    } as any;
+  }
+
+  private createReadProjectBitableTool(state: SessionRuntimeState) {
+    return {
+      name: 'read_project_bitable',
+      label: 'read_project_bitable',
+      description: 'Read the project bitable snapshot from Feishu.',
+      promptSnippet: 'read_project_bitable(): fetch current task board snapshot from Feishu.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      } as any,
+      execute: async () => {
+        const context = this.requireProjectContextBundle(state);
+        const cacheKey = `bitable:${context.project.bitableAppToken ?? 'none'}:${context.project.bitableTableId ?? 'none'}`;
+        const result = await this.getOrLoadCachedToolResult(state, cacheKey, async () =>
+          this.feishuReader.readBitableSnapshot(
+            context.project.bitableAppToken,
+            context.project.bitableTableId,
+          ),
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+        };
+      },
+    } as any;
+  }
+
+  private createListRecentProjectArtifactsTool(state: SessionRuntimeState) {
+    return {
+      name: 'list_recent_project_artifacts',
+      label: 'list_recent_project_artifacts',
+      description: 'List recent persisted artifacts for the current project.',
+      promptSnippet: 'list_recent_project_artifacts({ limit }): inspect recent project outputs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number' },
+        },
+        additionalProperties: false,
+      } as any,
+      execute: async (_toolCallId: string, params: ListRecentArtifactsArgs) => {
+        const context = this.requireProjectContextBundle(state);
+        const limit = Math.min(Math.max(Number(params.limit ?? 10), 1), 20);
+        const result = await this.prisma.artifact.findMany({
+          where: { projectId: context.project.id },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          select: {
+            id: true,
+            type: true,
+            title: true,
+            status: true,
+            createdAt: true,
+            feishuUrl: true,
+            metadata: true,
+          },
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                result.map((item) => ({
+                  ...item,
+                  createdAt: item.createdAt.toISOString(),
+                })),
+              ),
+            },
+          ],
+        };
+      },
+    } as any;
+  }
+
+  private createTodoListTool(state: SessionRuntimeState) {
+    return {
+      name: 'todo_list',
+      label: 'todo_list',
+      description: 'List the persisted runtime todo queue for the current group session.',
+      promptSnippet: 'todo_list(): inspect the current runtime todo queue before choosing what to execute next.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      } as any,
+      execute: async (_toolCallId: string, _params: TodoListArgs) => {
+        return {
+          content: [{ type: 'text', text: JSON.stringify(state.currentRuntimeTasks ?? []) }],
+        };
+      },
+    } as any;
+  }
+
+  private createTodoWriteTool(state: SessionRuntimeState) {
+    return {
+      name: 'todo_write',
+      label: 'todo_write',
+      description: 'Write changes to the persisted runtime todo queue.',
+      promptSnippet:
+        'todo_write({ action, ... }): create, update, start, complete, fail, cancel, or block a persisted runtime todo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { enum: ['create', 'update', 'start', 'complete', 'fail', 'cancel', 'block'] },
+          taskId: { type: 'string' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          intent: { type: 'string' },
+          skillHint: { type: 'string' },
+          outputMode: { type: 'string' },
+          taskPayload: { type: 'object' },
+          resultSummary: { type: 'string' },
+          errorMessage: { type: 'string' },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      } as any,
+      execute: async (_toolCallId: string, params: TodoWriteArgs) => {
+        const activeExecution = state.activeExecution;
+        if (!activeExecution || activeExecution.mode !== 'group_runtime') {
+          throw new Error('todo_write is only available during group runtime turns');
+        }
+        const action = this.normalizeTodoWriteAction(params);
+        if (!action) {
+          throw new Error('todo_write requires a valid action payload');
+        }
+        activeExecution.actions ??= [];
+        activeExecution.actions.push(action);
+        return {
+          content: [{ type: 'text', text: `Queued todo action: ${action.action}` }],
+        };
+      },
+    } as any;
+  }
+
+  private createReplyGroupTool(state: SessionRuntimeState) {
+    return {
+      name: 'reply_group',
+      label: 'reply_group',
+      description: 'Reply to the current group chat as part of the runtime turn.',
+      promptSnippet: 'reply_group({ text }): send a concise group-facing reply.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+        },
+        required: ['text'],
+        additionalProperties: false,
+      } as any,
+      execute: async (_toolCallId: string, params: ReplyGroupArgs) => {
+        const activeExecution = state.activeExecution;
+        if (!activeExecution || activeExecution.mode !== 'group_runtime') {
+          throw new Error('reply_group is only available during group runtime turns');
+        }
+        const text = typeof params.text === 'string' ? params.text.trim() : '';
+        if (!text) {
+          throw new Error('reply_group requires non-empty text');
+        }
+        activeExecution.actions ??= [];
+        activeExecution.actions.push({ type: 'reply_group', text });
+        return {
+          content: [{ type: 'text', text: 'Queued one group reply.' }],
+        };
+      },
+    } as any;
+  }
+
+  private createRequestGroupConfirmationTool(state: SessionRuntimeState) {
+    return {
+      name: 'request_group_confirmation',
+      label: 'request_group_confirmation',
+      description: 'Pause the current runtime task and request a human confirmation in the group.',
+      promptSnippet:
+        'request_group_confirmation({ taskId, actionType, summary, detail, payload }): create a confirmation request and stop the blocked task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          actionType: { type: 'string' },
+          summary: { type: 'string' },
+          detail: { type: 'string' },
+          payload: { type: 'object' },
+        },
+        required: ['actionType', 'summary', 'payload'],
+        additionalProperties: false,
+      } as any,
+      execute: async (_toolCallId: string, params: RequestGroupConfirmationArgs) => {
+        const activeExecution = state.activeExecution;
+        if (!activeExecution || activeExecution.mode !== 'group_runtime') {
+          throw new Error('request_group_confirmation is only available during group runtime turns');
+        }
+        const action = this.normalizeRuntimeConfirmationAction(params);
+        if (!action) {
+          throw new Error('request_group_confirmation requires a valid payload');
+        }
+        activeExecution.actions ??= [];
+        activeExecution.actions.push(action);
+        return {
+          content: [{ type: 'text', text: `Queued confirmation request for ${action.actionType}.` }],
+        };
+      },
+    } as any;
+  }
+
+  private requireProjectContextBundle(state: SessionRuntimeState) {
+    if (!state.currentProjectContextBundle) {
+      throw new Error('Feishu project tools require a project context bundle');
+    }
+
+    return state.currentProjectContextBundle;
+  }
+
+  private async getOrLoadCachedToolResult<T>(state: SessionRuntimeState, key: string, loader: () => Promise<T>) {
+    if (state.toolCache.has(key)) {
+      return state.toolCache.get(key) as T;
+    }
+
+    const value = await loader();
+    state.toolCache.set(key, value);
+    return value;
+  }
+
   private normalizeOutputs(value: unknown): AgentOutput[] {
     if (!Array.isArray(value)) {
       return [];
@@ -617,6 +1161,49 @@ export class PiMonoAdapter {
 
   private normalizeDecision(value: unknown): ManagerInteractiveDecision | null {
     return this.isManagerInteractiveDecision(value) ? value : null;
+  }
+
+  private normalizeTodoWriteAction(value: TodoWriteArgs): GroupRuntimeTodoWriteAction | null {
+    const action = String(value.action ?? '').trim();
+    if (!['create', 'update', 'start', 'complete', 'fail', 'cancel', 'block'].includes(action)) {
+      return null;
+    }
+    const normalized: GroupRuntimeTodoWriteAction = {
+      type: 'todo_write',
+      action: action as GroupRuntimeTodoWriteAction['action'],
+    };
+    if (typeof value.taskId === 'string' && value.taskId.trim()) normalized.taskId = value.taskId.trim();
+    if (typeof value.title === 'string' && value.title.trim()) normalized.title = value.title.trim();
+    if (typeof value.description === 'string') normalized.description = value.description.trim();
+    if (typeof value.intent === 'string' && value.intent.trim()) normalized.intent = value.intent.trim();
+    if (typeof value.skillHint === 'string') normalized.skillHint = value.skillHint.trim();
+    if (typeof value.outputMode === 'string') normalized.outputMode = value.outputMode.trim();
+    if (typeof value.resultSummary === 'string') normalized.resultSummary = value.resultSummary.trim();
+    if (typeof value.errorMessage === 'string') normalized.errorMessage = value.errorMessage.trim();
+    if (value.taskPayload && typeof value.taskPayload === 'object' && !Array.isArray(value.taskPayload)) {
+      normalized.taskPayload = value.taskPayload as Record<string, unknown>;
+    }
+    return normalized;
+  }
+
+  private normalizeRuntimeConfirmationAction(value: RequestGroupConfirmationArgs): GroupRuntimeConfirmationAction | null {
+    if (typeof value.actionType !== 'string' || !value.actionType.trim()) {
+      return null;
+    }
+    if (typeof value.summary !== 'string' || !value.summary.trim()) {
+      return null;
+    }
+    if (!value.payload || typeof value.payload !== 'object' || Array.isArray(value.payload)) {
+      return null;
+    }
+    return {
+      type: 'request_group_confirmation',
+      taskId: typeof value.taskId === 'string' && value.taskId.trim() ? value.taskId.trim() : undefined,
+      actionType: value.actionType.trim(),
+      summary: value.summary.trim(),
+      detail: typeof value.detail === 'string' ? value.detail.trim() : undefined,
+      payload: value.payload as any,
+    };
   }
 
   private isManagerInteractiveDecision(value: unknown): value is ManagerInteractiveDecision {
@@ -671,6 +1258,7 @@ export class PiMonoAdapter {
   private buildPrompt(payload: PiMonoCreateRunRequest): string {
     const requestKind = payload.requestKind ?? 'formal_execution';
     const decisionMode = requestKind === 'interactive_decision';
+    const groupRuntimeMode = requestKind === 'group_runtime';
     const promptGuidance = decisionMode
       ? [
           'You are the manager agent for a Feishu project collaboration workspace.',
@@ -688,9 +1276,23 @@ export class PiMonoAdapter {
           'Do not return raw JSON in assistant text.',
           'If no formal document, task, file, or log is needed, emit one summary output.',
         ];
+    const groupRuntimeGuidance = groupRuntimeMode
+      ? [
+          'You are managing a long-running group runtime for a Feishu project workspace.',
+          'Only act on explicit @bot requests and the persisted runtime todo queue.',
+          'First decide whether the latest message creates new internal todos or updates existing ones.',
+          'Maintain the persisted todo queue with todo_list and todo_write.',
+          'At most one todo may be in running state at any time.',
+          'If human confirmation is required, use request_group_confirmation and stop the blocked todo in waiting_confirmation.',
+          'Use reply_group for concise user-facing updates.',
+          'Internal todos are not the official Feishu task board unless you explicitly emit a formal task output.',
+          'When you are ready to persist formal deliverables, call emit_outputs exactly once.',
+        ]
+      : [];
 
     return [
       ...promptGuidance,
+      ...groupRuntimeGuidance,
       `Runtime session: ${payload.runtimeSessionKey}`,
       `Agent scope: ${payload.agentScopeKey ?? 'not configured'}`,
       `Session mode: ${payload.sessionMode ?? 'active'}`,
@@ -701,17 +1303,32 @@ export class PiMonoAdapter {
       `Environment: ${payload.environment.name} (${payload.environment.id})`,
       `Repository: ${payload.environment.repoUrl ?? 'not configured'}`,
       `Branch: ${payload.environment.repoBranch ?? 'not configured'}`,
+      `Repo mirror path: ${payload.environment.repoMirrorPath ?? 'not prepared'}`,
+      `Repo sync status: ${payload.environment.repoSyncStatus ?? 'unknown'}`,
+      `Repo head: ${payload.environment.repoHeadRef ?? 'unknown'}`,
       `Intent: ${payload.intent}`,
       '',
       'Available built-in tools are read-only: read, grep, find, ls.',
+      'Available Feishu tools are on-demand only: list_project_folder, read_project_doc, search_project_docs, read_project_bitable, list_recent_project_artifacts.',
+      groupRuntimeMode
+        ? 'Runtime tools are available: todo_list, todo_write, reply_group, request_group_confirmation, emit_outputs.'
+        : 'Runtime tools are disabled for this request kind.',
+      payload.environment.repoMirrorPath && payload.environment.repoSyncStatus === 'ready'
+        ? 'Use the current local repo mirror as the source of truth for code inspection.'
+        : 'Code context is not currently available from a ready local repo mirror. Do not assume repository contents; use only what you can verify.',
+      'Feishu project materials are not mirrored locally. Query them with tools only when needed.',
+      payload.environment.repoSyncError ? `Latest repo sync error: ${payload.environment.repoSyncError}` : 'Latest repo sync error: none',
       payload.projectContextBundle
         ? 'A serialized project context bundle is attached below. Reuse it instead of guessing project state.'
         : 'No project context bundle is attached.',
+      payload.roleProfile ? 'A compiled role profile context file is attached below.' : 'No role profile is attached.',
       `Target output schema: ${JSON.stringify(payload.outputSchema)}`,
       '',
+      ...(payload.roleProfile ? ['Compiled AGENTS.md (virtual):', payload.roleProfile.compiledContextFile, ''] : []),
       ...(payload.projectContextBundle
         ? ['Project context bundle (JSON):', JSON.stringify(payload.projectContextBundle), '']
         : []),
+      ...(groupRuntimeMode ? ['Persisted runtime todo queue (JSON):', JSON.stringify(payload.runtimeTasks ?? []), ''] : []),
       'User request:',
       payload.prompt,
     ].join('\n');
@@ -910,9 +1527,16 @@ export class PiMonoAdapter {
     writeFileSync(modelsPath, JSON.stringify(existing, null, 2), 'utf8');
   }
 
-  private resolveCwd(projectPath?: string | null) {
+  private resolveCwd(input: {
+    repoMirrorPath?: string | null;
+    repoSyncStatus?: string | null;
+    projectPath?: string | null;
+  }) {
     const fallback = this.config.get<string>('PI_MONO_WORKDIR') || process.cwd();
-    const cwd = projectPath || fallback;
+    const cwd =
+      input.repoMirrorPath && input.repoSyncStatus === 'ready'
+        ? input.repoMirrorPath
+        : input.projectPath || fallback;
     return existsSync(cwd) ? cwd : process.cwd();
   }
 }

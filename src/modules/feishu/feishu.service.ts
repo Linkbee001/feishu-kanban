@@ -67,6 +67,26 @@ export class FeishuService {
     });
   }
 
+  async addMessageReaction(messageId: string, reactionType: string) {
+    return this.request<any>(`/im/v1/messages/${encodeURIComponent(messageId)}/reactions`, {
+      method: 'POST',
+      body: {
+        reaction_type: {
+          emoji_type: reactionType,
+        },
+      },
+    });
+  }
+
+  async removeMessageReaction(messageId: string, reactionId: string) {
+    return this.request<any>(
+      `/im/v1/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(reactionId)}`,
+      {
+        method: 'DELETE',
+      },
+    );
+  }
+
   async createProjectFolder(projectName: string): Promise<{ token: string; url?: string }> {
     const title = `${projectName}-项目文档`;
     const data = await this.request<any>('/drive/v1/files/create_folder', {
@@ -184,6 +204,50 @@ export class FeishuService {
     return this.request<any>(`/im/v1/chats/${encodeURIComponent(chatId)}/chat_tabs`, {
       method: 'GET',
     });
+  }
+
+  async listChatMembers(chatId: string) {
+    const members: Array<{
+      openId: string;
+      displayName: string;
+      groupNickname?: string | null;
+      metadata?: Record<string, unknown>;
+    }> = [];
+    let pageToken: string | undefined;
+
+    do {
+      const data = await this.request<any>(`/im/v1/chats/${encodeURIComponent(chatId)}/members`, {
+        method: 'GET',
+        query: {
+          page_size: '100',
+          ...(pageToken ? { page_token: pageToken } : {}),
+          member_id_type: 'open_id',
+        },
+      });
+      const items = Array.isArray(data?.data?.items) ? data.data.items : [];
+      for (const item of items) {
+        const openId = item?.member_id ?? item?.open_id ?? item?.member_id_type?.open_id;
+        const displayName = item?.name ?? item?.display_name ?? item?.nickname;
+        if (!openId || !displayName) {
+          continue;
+        }
+        members.push({
+          openId,
+          displayName,
+          groupNickname: item?.chat_name ?? item?.nickname ?? displayName,
+          metadata: {
+            tenantKey: item?.tenant_key ?? null,
+            userType: item?.type ?? null,
+          },
+        });
+      }
+      pageToken = data?.data?.page_token || undefined;
+      if (!data?.data?.has_more) {
+        pageToken = undefined;
+      }
+    } while (pageToken);
+
+    return members;
   }
 
   async listDriveFiles(input: {
