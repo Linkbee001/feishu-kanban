@@ -48,19 +48,17 @@ export class AgentRunProcessor extends WorkerHost {
         await this.groupSessions.rehydrateSession(groupSession.feishuChatId);
       }
 
-      const repoSync = await this.repoSync.ensureRepoFresh({
-        projectId: run.project.id,
-        environmentId: run.environment.id,
+      const repoCapability = this.repoSync.getCapabilityState({
         repoUrl: run.environment.repoUrl,
-        repoBranch: run.environment.repoBranch,
-        repoCredentialRef: run.environment.repoCredentialRef,
-        force: true,
+        repoSyncStatus: run.environment.repoSyncStatus,
       });
-      if (run.environment.repoUrl && repoSync.status !== 'ready') {
+      if (run.environment.repoUrl && repoCapability !== 'repo_ready') {
         await this.agent.transition(run.id, AgentRunStatus.failed, {
           finishedAt: new Date(),
-          errorCode: 'REPO_SYNC_FAILED',
-          errorMessage: repoSync.error ?? 'Repository mirror sync failed before formal execution.',
+          errorCode: 'REPO_NOT_READY',
+          errorMessage:
+            run.environment.repoSyncError ??
+            `Environment repo is not ready for execution (state: ${repoCapability}). Trigger repo sync from the management plane first.`,
         });
         return;
       }

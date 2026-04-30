@@ -4,6 +4,7 @@ import { GroupRuntimeService } from '../agent/group-runtime.service';
 import { FeishuService } from '../feishu/feishu.service';
 import { GroupPolicyService } from '../project/group-policy.service';
 import { ProjectMemberProfileService } from '../project/project-member-profile.service';
+import { RepoSyncService } from '../repo/repo-sync.service';
 
 @Injectable()
 export class AdminService {
@@ -13,6 +14,7 @@ export class AdminService {
     private readonly feishu: FeishuService,
     private readonly policies: GroupPolicyService,
     private readonly memberProfiles: ProjectMemberProfileService,
+    private readonly repoSync: RepoSyncService,
   ) {}
 
   async listRobotInstances() {
@@ -65,15 +67,18 @@ export class AdminService {
         initStatus: session.project ? session.project.status : 'uninitialized',
         sessionMode: session.sessionMode,
         sessionStatus: session.status,
+        activeEnvironmentId: session.activeEnvironment?.id ?? null,
         activeEnvironmentName: session.activeEnvironment?.name ?? null,
         lastActiveAt: session.lastMessageAt?.toISOString() ?? session.updatedAt.toISOString(),
         lastError: session.lastError,
         runtimeState: this.runtimeStateFromJson(session.runtimeStateJson),
+        runtimeStatus: this.runtimeStateFromJson(session.runtimeStateJson)?.status ?? null,
         recentSkill: recentRun?.skillName ?? recentRun?.intent ?? null,
         recentRunType: (recentRun as any)?.runType ?? null,
         recentArtifactSummary: recentArtifact ? `${recentArtifact.type}:${recentArtifact.title}` : null,
         taskCounts: counts,
         policy: this.policies.toSnapshot(policy),
+        repoCapability: session.activeEnvironment ? this.repoSync.getCapabilitySnapshot(session.activeEnvironment) : null,
       };
     });
   }
@@ -114,15 +119,18 @@ export class AdminService {
       initStatus: session.project ? session.project.status : 'uninitialized',
       sessionMode: session.sessionMode,
       sessionStatus: session.status,
+      activeEnvironmentId: session.activeEnvironment?.id ?? null,
       activeEnvironmentName: session.activeEnvironment?.name ?? null,
       lastActiveAt: session.lastMessageAt?.toISOString() ?? session.updatedAt.toISOString(),
       lastError: session.lastError,
       runtimeState: this.runtimeStateFromJson(session.runtimeStateJson),
+      runtimeStatus: this.runtimeStateFromJson(session.runtimeStateJson)?.status ?? null,
       recentSkill: recentRun?.skillName ?? recentRun?.intent ?? null,
       recentRunType: (recentRun as any)?.runType ?? null,
       recentArtifactSummary: recentArtifact ? `${recentArtifact.type}:${recentArtifact.title}` : null,
       taskCounts: counts,
       policy: this.policies.toSnapshot(policy),
+      repoCapability: session.activeEnvironment ? this.repoSync.getCapabilitySnapshot(session.activeEnvironment) : null,
     };
   }
 
@@ -139,6 +147,14 @@ export class AdminService {
       runtimeEvents: snapshot.runtimeEvents ?? [],
       summary: counts,
       tasks: snapshot.tasks ?? [],
+      taskProjectionSummary: summarizeTasks(snapshot.tasks ?? []),
+      repoCapability: snapshot.session.activeEnvironmentId
+        ? this.repoSync.getCapabilitySnapshot(
+            await this.prisma.projectEnvironment.findUniqueOrThrow({
+              where: { id: snapshot.session.activeEnvironmentId },
+            }),
+          )
+        : null,
     };
   }
 

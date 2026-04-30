@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   BitableRecordSnapshot,
@@ -15,20 +15,40 @@ type TaskFieldHints = {
   dueDateField?: string;
 };
 
+type FolderScanResult = {
+  entries: FeishuFolderEntrySnapshot[];
+  documents: FeishuDocumentSnapshot[];
+  truncated: boolean;
+};
+
+type ScanProjectFolderOptions = {
+  includeDocumentContents?: boolean;
+};
+
 @Injectable()
 export class FeishuProjectReader {
+  private readonly logger = new Logger(FeishuProjectReader.name);
+  private readonly folderCache = new Map<string, { expiresAt: number; value: FolderScanResult }>();
+  private readonly documentCache = new Map<string, { expiresAt: number; value: FeishuDocumentSnapshot | null }>();
+
   constructor(
     private readonly feishu: FeishuService,
     private readonly config: ConfigService,
   ) {}
 
-  async scanProjectFolder(folderToken?: string | null): Promise<{
-    entries: FeishuFolderEntrySnapshot[];
-    documents: FeishuDocumentSnapshot[];
-    truncated: boolean;
-  }> {
+  async scanProjectFolder(
+    folderToken?: string | null,
+    options: ScanProjectFolderOptions = {},
+  ): Promise<FolderScanResult> {
     if (!folderToken) {
       return { entries: [], documents: [], truncated: false };
+    }
+
+    const includeDocumentContents = options.includeDocumentContents ?? true;
+    const cacheKey = `${folderToken}:${includeDocumentContents ? 'full' : 'meta'}`;
+    const cached = this.getFreshFolderCache(cacheKey);
+    if (cached) {
+      return cached;
     }
 
     const maxEntries = this.config.get<number>('DIGEST_FOLDER_SCAN_LIMIT') ?? 500;
@@ -89,24 +109,26 @@ export class FeishuProjectReader {
 
     const documents: FeishuDocumentSnapshot[] = [];
     for (const doc of textDocs) {
-      try {
-        const raw = await this.feishu.getDocumentRawContent(doc.token);
-        const rawContent =
-          raw?.data?.content ??
-          raw?.data?.raw_content ??
-          raw?.data?.rawContent ??
-          '';
+      if (!includeDocumentContents) {
+        const cachedDoc = this.getCachedDocument(doc.token);
         documents.push({
           token: doc.token,
           title: doc.title,
           type: doc.type,
           url: doc.url ?? null,
           updatedAt: doc.updatedAt ?? null,
-          rawContent: rawContent.slice(0, 4_000),
-          summary: this.summarize(rawContent),
+          rawContent: cachedDoc?.rawContent ?? null,
+          summary: cachedDoc?.summary ?? null,
         });
-      } catch {
-        documents.push({
+        continue;
+      }
+
+      const snapshot = await this.readProjectDocument(doc.token, doc.title, {
+        maxContentLength: 4_000,
+        preserveMissingAsNull: false,
+      });
+      documents.push(
+        snapshot ?? {
           token: doc.token,
           title: doc.title,
           type: doc.type,
@@ -114,39 +136,77 @@ export class FeishuProjectReader {
           updatedAt: doc.updatedAt ?? null,
           rawContent: null,
           summary: null,
-        });
-      }
+        },
+      );
     }
 
-    return { entries, documents, truncated };
+    const result = { entries, documents, truncated };
+    this.setFolderCache(cacheKey, result);
+    return result;
   }
 
   async listProjectFolder(folderToken?: string | null) {
-    return this.scanProjectFolder(folderToken);
+    return this.scanProjectFolder(folderToken, { includeDocumentContents: false });
   }
 
-  async readProjectDocument(token?: string | null, title?: string | null): Promise<FeishuDocumentSnapshot | null> {
-    if (!token?.trim()) {
+  async readProjectDocument(
+    token?: string | null,
+    title?: string | null,
+    options: {
+      maxContentLength?: number;
+      preserveMissingAsNull?: boolean;
+    } = {},
+  ): Promise<FeishuDocumentSnapshot | null> {
+    const normalizedToken = token?.trim();
+    if (!normalizedToken) {
       return null;
     }
 
+    const cached = this.getCachedDocument(normalizedToken);
+    if (cached) {
+      return this.withDocumentOverrides(cached, title, options.maxContentLength);
+    }
+
     try {
-      const raw = await this.feishu.getDocumentRawContent(token.trim());
+      const raw = await this.feishu.getDocumentRawContent(normalizedToken);
       const rawContent =
         raw?.data?.content ??
         raw?.data?.raw_content ??
         raw?.data?.rawContent ??
         '';
-      return {
-        token: token.trim(),
-        title: title?.trim() || token.trim(),
+      const snapshot: FeishuDocumentSnapshot = {
+        token: normalizedToken,
+        title: title?.trim() || normalizedToken,
         type: 'docx',
-        rawContent: rawContent.slice(0, 8_000),
+        rawContent: rawContent.slice(0, options.maxContentLength ?? 8_000),
         summary: this.summarize(rawContent),
-        url: this.feishu.documentUrl(token.trim()),
+        url: this.feishu.documentUrl(normalizedToken),
         updatedAt: null,
       };
-    } catch {
+      this.setDocumentCache(normalizedToken, snapshot);
+      return snapshot;
+    } catch (error) {
+      if (this.isRateLimitError(error)) {
+        const stale = this.getStaleDocument(normalizedToken);
+        if (stale) {
+          this.logger.warn(`Feishu doc raw_content rate limited for ${normalizedToken}; using cached snapshot`);
+          return this.withDocumentOverrides(stale, title, options.maxContentLength);
+        }
+
+        return {
+          token: normalizedToken,
+          title: title?.trim() || normalizedToken,
+          type: 'docx',
+          rawContent: null,
+          summary: 'Feishu document content is temporarily unavailable because the doc API is rate limited.',
+          url: this.feishu.documentUrl(normalizedToken),
+          updatedAt: null,
+        };
+      }
+
+      if (options.preserveMissingAsNull ?? true) {
+        return null;
+      }
       return null;
     }
   }
@@ -157,12 +217,13 @@ export class FeishuProjectReader {
       return [];
     }
 
-    const folder = await this.scanProjectFolder(folderToken);
-    return folder.documents.filter((doc) =>
-      [doc.title, doc.summary, doc.rawContent]
+    const folder = await this.scanProjectFolder(folderToken, { includeDocumentContents: false });
+    return folder.documents.filter((doc) => {
+      const cached = this.getCachedDocument(doc.token);
+      return [doc.title, doc.summary, doc.rawContent, cached?.summary, cached?.rawContent]
         .filter((item): item is string => typeof item === 'string')
-        .some((item) => item.toLowerCase().includes(keyword)),
-    );
+        .some((item) => item.toLowerCase().includes(keyword));
+    });
   }
 
   async readBitableSnapshot(appToken?: string | null, tableId?: string | null): Promise<BitableSnapshot | null> {
@@ -426,6 +487,72 @@ export class FeishuProjectReader {
 
   private isReadableDocument(type: string) {
     return ['docx', 'doc'].includes(type.toLowerCase());
+  }
+
+  private withDocumentOverrides(
+    snapshot: FeishuDocumentSnapshot,
+    title?: string | null,
+    maxContentLength?: number,
+  ): FeishuDocumentSnapshot {
+    const rawContent = typeof snapshot.rawContent === 'string'
+      ? snapshot.rawContent.slice(0, maxContentLength ?? snapshot.rawContent.length)
+      : snapshot.rawContent;
+    return {
+      ...snapshot,
+      title: title?.trim() || snapshot.title,
+      rawContent,
+    };
+  }
+
+  private getFreshFolderCache(cacheKey: string) {
+    const cached = this.folderCache.get(cacheKey);
+    if (!cached) {
+      return null;
+    }
+    if (cached.expiresAt <= Date.now()) {
+      this.folderCache.delete(cacheKey);
+      return null;
+    }
+    return cached.value;
+  }
+
+  private setFolderCache(cacheKey: string, value: FolderScanResult) {
+    const ttlMs = this.config.get<number>('FEISHU_PROJECT_FOLDER_CACHE_TTL_MS') ?? 30_000;
+    this.folderCache.set(cacheKey, {
+      expiresAt: Date.now() + ttlMs,
+      value,
+    });
+  }
+
+  private getCachedDocument(token: string) {
+    const cached = this.documentCache.get(token);
+    if (!cached) {
+      return null;
+    }
+    if (cached.expiresAt <= Date.now()) {
+      this.documentCache.delete(token);
+      return null;
+    }
+    return cached.value;
+  }
+
+  private getStaleDocument(token: string) {
+    return this.documentCache.get(token)?.value ?? null;
+  }
+
+  private setDocumentCache(token: string, value: FeishuDocumentSnapshot | null) {
+    const ttlMs = this.config.get<number>('FEISHU_PROJECT_DOC_CACHE_TTL_MS') ?? 120_000;
+    this.documentCache.set(token, {
+      expiresAt: Date.now() + ttlMs,
+      value,
+    });
+  }
+
+  private isRateLimitError(error: unknown) {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    return /request trigger frequency limit/i.test(error.message);
   }
 
   private summarize(rawContent: string) {

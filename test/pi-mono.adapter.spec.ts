@@ -60,6 +60,12 @@ describe('PiMonoAdapter', () => {
         findMany: jest.fn().mockResolvedValue([]),
         upsert: jest.fn().mockResolvedValue(undefined),
       },
+      groupAgentSession: {
+        findUnique: jest.fn().mockResolvedValue({
+          runtimeStateJson: {},
+        }),
+        update: jest.fn().mockResolvedValue(undefined),
+      },
       confirmationRequest: {
         create: jest.fn().mockResolvedValue({ id: 'confirm_1' }),
         update: jest.fn().mockResolvedValue(undefined),
@@ -83,6 +89,7 @@ describe('PiMonoAdapter', () => {
     return {
       sendTextMessage: jest.fn().mockResolvedValue(undefined),
       sendCard: jest.fn().mockResolvedValue({ data: { message_id: 'card_1' } }),
+      removeMessageReaction: jest.fn().mockResolvedValue(undefined),
     };
   }
 
@@ -290,6 +297,7 @@ describe('PiMonoAdapter', () => {
     let replyGroupTool: any;
     let confirmationTool: any;
     let resourceLoaderArgs: any;
+    let runtimePrompt = '';
     class FakeResourceLoader {
       constructor(args: any) {
         resourceLoaderArgs = args;
@@ -301,6 +309,7 @@ describe('PiMonoAdapter', () => {
     }
     const fakeSession = {
       prompt: jest.fn(async (_prompt: string) => {
+        runtimePrompt = _prompt;
         await todoWriteTool.execute('tool-1', {
           action: 'create',
           title: 'smoke task',
@@ -438,6 +447,129 @@ describe('PiMonoAdapter', () => {
         content: '# AGENTS\nsmoke profile',
       },
     ]);
+    expect(runtimePrompt).toContain('This turn is a group runtime turn, not a formal execution run.');
+    expect(runtimePrompt).not.toContain('This turn is a formal execution run that may produce persisted artifacts.');
+    expect(runtimePrompt).toContain('## Execution Bias');
+    expect(runtimePrompt).toContain('## Tooling');
+    expect(runtimePrompt).toContain('## Runtime Policy');
+    expect(runtimePrompt).toContain('Repo capability state: repo_unconfigured');
+    expect(runtimePrompt).toContain('Runtime task snapshot count: 0');
+  });
+
+  it('uses a longer default timeout for group runtime turns and allows configuration overrides', () => {
+    const adapterDefault = new PiMonoAdapter(
+      createConfig() as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      createRedis() as any,
+      createArtifactQueue() as any,
+    );
+    const adapterOverride = new PiMonoAdapter(
+      createConfig({ PI_MONO_GROUP_RUNTIME_TIMEOUT_SECONDS: 180 }) as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      createRedis() as any,
+      createArtifactQueue() as any,
+    );
+
+    expect((adapterDefault as any).resolveGroupRuntimeTimeoutMs()).toBe(120_000);
+    expect((adapterOverride as any).resolveGroupRuntimeTimeoutMs()).toBe(180_000);
+  });
+
+  it('salvages captured runtime actions and outputs when a group runtime turn times out', async () => {
+    const adapter = new PiMonoAdapter(
+      createConfig() as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      createRedis() as any,
+      createArtifactQueue() as any,
+    );
+
+    const state = {
+      runtimeSessionKey: 'chat:chat_salvage:manager',
+      cwd: process.cwd(),
+      session: {} as any,
+      sessionManager: {} as any,
+      currentContextBinding: {
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        feishuChatId: 'chat_salvage',
+        groupSessionId: 'group_session_1',
+      },
+      runtimeTaskSnapshots: [],
+      pendingRuntimeTaskEvents: [],
+      queue: [],
+      currentTurn: {
+        turnId: 'turn_salvage',
+        startedAt: new Date().toISOString(),
+        mode: 'group_runtime',
+        messageSourceId: 'source_1',
+      },
+      eventSequence: 0,
+      recentEvents: [],
+      actorQueue: Promise.resolve(),
+      toolCache: new Map(),
+      waitingReason: undefined,
+    } as any;
+
+    const applySpy = jest.spyOn(adapter as any, 'applyRuntimeTurnResult').mockResolvedValue(undefined);
+    const eventSpy = jest.spyOn(adapter as any, 'recordRuntimeEvent').mockResolvedValue(undefined);
+    jest.spyOn(adapter as any, 'startNextQueuedTurn').mockResolvedValue(undefined);
+    jest.spyOn(adapter as any, 'executeGroupRuntimePrompt').mockResolvedValue({
+      status: 'timeout',
+      actions: [{ type: 'reply_group', text: 'partial reply' }],
+      outputs: [{ type: 'summary', title: 'partial', content: 'partial content' }],
+      outputSummary: 'partial',
+      session: {
+        runtimeSessionKey: 'chat:chat_salvage:manager',
+        piSessionId: 'pi_1',
+        sessionStoreDriver: 'local_file',
+      },
+    });
+
+    await (adapter as any).runRuntimeTurn({
+      state,
+      project: { id: 'project_1', name: 'Payments', feishuChatId: 'chat_salvage' },
+      environment: { id: 'env_1', name: 'Default', projectPath: process.cwd() },
+      queueMode: 'collect',
+      reasonText: 'salvage request',
+      source: { messageSourceId: 'source_1' },
+    });
+
+    expect(applySpy).toHaveBeenCalledWith(
+      state,
+      expect.objectContaining({ status: 'timeout' }),
+      'source_1',
+      expect.objectContaining({
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        feishuChatId: 'chat_salvage',
+      }),
+    );
+    expect(eventSpy).toHaveBeenCalledWith(
+      state,
+      'turn_failed',
+      expect.objectContaining({
+        turnId: 'turn_salvage',
+        status: 'timeout',
+        salvaged: true,
+      }),
+      expect.objectContaining({
+        projectId: 'project_1',
+        environmentId: 'env_1',
+        feishuChatId: 'chat_salvage',
+      }),
+    );
+    expect(eventSpy).not.toHaveBeenCalledWith(
+      state,
+      'reply_emitted',
+      expect.objectContaining({
+        messageSourceId: 'source_1',
+      }),
+    );
   });
 
   it('starts a runtime turn and records runtime events for idle submitMessage', async () => {

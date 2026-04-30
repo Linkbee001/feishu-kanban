@@ -16,6 +16,7 @@ describe('FeishuProjectReader', () => {
     const feishu = {
       listDriveFiles: jest.fn(),
       getDocumentRawContent: jest.fn(),
+      documentUrl: jest.fn((token: string) => `https://feishu.example/${token}`),
       listBitableFields: jest.fn(),
       listBitableRecords: jest.fn(),
     };
@@ -147,7 +148,7 @@ describe('FeishuProjectReader', () => {
     expect(snapshot?.recentRows).toHaveLength(3);
   });
 
-  it('searches recent documents by keyword and tolerates read failures for direct reads', async () => {
+  it('searches recent documents by metadata without pulling raw content for every candidate', async () => {
     const { reader, feishu } = createReader();
 
     feishu.listDriveFiles.mockResolvedValue({
@@ -156,26 +157,53 @@ describe('FeishuProjectReader', () => {
           {
             token: 'doc_1',
             type: 'docx',
-            name: 'Weekly Sync',
+            name: 'Risk Register',
             edit_time: '2026-04-25T00:00:00.000Z',
           },
         ],
         has_more: false,
       },
     });
+
+    const search = await reader.searchProjectDocuments('root', 'risk');
+
+    expect(search).toHaveLength(1);
+    expect(search[0]).toEqual(expect.objectContaining({ token: 'doc_1', rawContent: null }));
+    expect(feishu.getDocumentRawContent).not.toHaveBeenCalled();
+  });
+
+  it('reuses cached content and degrades gracefully when Feishu raw_content is rate limited', async () => {
+    const { reader, feishu } = createReader();
+
     feishu.getDocumentRawContent
       .mockResolvedValueOnce({
         data: {
           content: 'Project risk and delivery notes',
         },
       })
-      .mockRejectedValueOnce(new Error('boom'));
+      .mockRejectedValueOnce(new Error('request trigger frequency limit'));
 
-    const search = await reader.searchProjectDocuments('root', 'risk');
-    const direct = await reader.readProjectDocument('doc_404', 'Missing Doc');
+    const first = await reader.readProjectDocument('doc_1', 'Risk Register');
+    const second = await reader.readProjectDocument('doc_1', 'Risk Register');
 
-    expect(search).toHaveLength(1);
-    expect(search[0]).toEqual(expect.objectContaining({ token: 'doc_1' }));
-    expect(direct).toBeNull();
+    expect(first).toEqual(expect.objectContaining({ summary: 'Project risk and delivery notes' }));
+    expect(second).toEqual(expect.objectContaining({ summary: 'Project risk and delivery notes' }));
+    expect(feishu.getDocumentRawContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a placeholder snapshot when Feishu raw_content is rate limited before any cache exists', async () => {
+    const { reader, feishu } = createReader();
+
+    feishu.getDocumentRawContent.mockRejectedValueOnce(new Error('request trigger frequency limit'));
+
+    const doc = await reader.readProjectDocument('doc_rate_limited', 'Rate Limited Doc');
+
+    expect(doc).toEqual(
+      expect.objectContaining({
+        token: 'doc_rate_limited',
+        rawContent: null,
+        summary: expect.stringContaining('rate limited'),
+      }),
+    );
   });
 });

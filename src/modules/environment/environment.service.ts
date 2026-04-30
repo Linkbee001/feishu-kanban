@@ -29,6 +29,7 @@ export class EnvironmentService {
   }) {
     const project = await this.prisma.project.findUnique({ where: { id: projectId } });
     if (!project) throw new BadRequestException('Project not found');
+    const hasRepo = Boolean(input.repoUrl?.trim());
     const environment = await this.prisma.projectEnvironment.create({
       data: {
         projectId,
@@ -39,7 +40,7 @@ export class EnvironmentService {
         repoBranch: input.repoBranch,
         repoCredentialRef: input.repoCredentialRef,
         repoAccessMode: (input.repoAccessMode as RepoAccessMode) ?? RepoAccessMode.readonly,
-        repoSyncStatus: input.repoUrl ? RepoSyncStatus.uninitialized : RepoSyncStatus.uninitialized,
+        repoSyncStatus: hasRepo ? RepoSyncStatus.syncing : RepoSyncStatus.uninitialized,
         projectPath: input.projectPath,
         modelEndpoint: input.modelEndpoint,
         modelName: input.modelName,
@@ -51,7 +52,7 @@ export class EnvironmentService {
         lastActiveAt: new Date(),
       },
     });
-    if (input.repoUrl) {
+    if (hasRepo) {
       await this.repoSyncQueue.enqueueSync(projectId, environment.id, false);
     }
     if (input.setDefault) await this.setDefault(projectId, environment.id);
@@ -74,12 +75,14 @@ export class EnvironmentService {
       data.repoUrl !== undefined ||
       data.repoBranch !== undefined ||
       data.repoCredentialRef !== undefined;
+    const nextRepoUrl = typeof data.repoUrl === 'string' ? data.repoUrl.trim() : undefined;
+    const hasRepoConfigured = nextRepoUrl !== undefined ? Boolean(nextRepoUrl) : undefined;
     const updated = await this.prisma.projectEnvironment.update({
       where: { id },
       data: repoConfigChanged
         ? {
             ...data,
-            repoSyncStatus: RepoSyncStatus.uninitialized,
+            repoSyncStatus: hasRepoConfigured === false ? RepoSyncStatus.uninitialized : RepoSyncStatus.syncing,
             repoSyncError: null,
             lastRepoSyncAt: null,
             repoHeadRef: null,
@@ -102,6 +105,22 @@ export class EnvironmentService {
         },
       });
     }
+    return this.find(id);
+  }
+
+  async triggerRepoSync(id: string, force = true) {
+    const environment = await this.find(id);
+    if (!environment.repoUrl?.trim()) {
+      throw new BadRequestException('Environment repo is not configured');
+    }
+    await this.prisma.projectEnvironment.update({
+      where: { id: environment.id },
+      data: {
+        repoSyncStatus: RepoSyncStatus.syncing,
+        repoSyncError: null,
+      },
+    });
+    await this.repoSyncQueue.enqueueSync(environment.projectId, environment.id, force);
     return this.find(id);
   }
 

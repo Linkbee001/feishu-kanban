@@ -50,6 +50,50 @@ export class RepoSyncService {
     return { attempted: true, reason: 'synced' as const, result };
   }
 
+  getCapabilityState(input: {
+    repoUrl?: string | null;
+    repoSyncStatus?: RepoSyncStatus | string | null;
+  }): 'repo_unconfigured' | 'repo_initializing' | 'repo_ready' | 'repo_error' {
+    if (!input.repoUrl?.trim()) {
+      return 'repo_unconfigured';
+    }
+    if (input.repoSyncStatus === RepoSyncStatus.ready || input.repoSyncStatus === 'ready') {
+      return 'repo_ready';
+    }
+    if (input.repoSyncStatus === RepoSyncStatus.error || input.repoSyncStatus === 'error') {
+      return 'repo_error';
+    }
+    return 'repo_initializing';
+  }
+
+  getCapabilitySnapshot(input: {
+    id?: string;
+    name?: string;
+    repoUrl?: string | null;
+    repoBranch?: string | null;
+    repoMirrorPath?: string | null;
+    repoSyncStatus?: RepoSyncStatus | string | null;
+    repoSyncError?: string | null;
+    repoHeadRef?: string | null;
+    lastRepoSyncAt?: Date | null;
+    projectPath?: string | null;
+  }) {
+    return {
+      environmentId: input.id ?? null,
+      environmentName: input.name ?? null,
+      state: this.getCapabilityState(input),
+      repoConfigured: Boolean(input.repoUrl?.trim()),
+      repoUrl: input.repoUrl ?? null,
+      repoBranch: input.repoBranch ?? null,
+      repoMirrorPath: input.repoMirrorPath ?? null,
+      workspacePath: input.repoMirrorPath ?? input.projectPath ?? null,
+      repoHeadRef: input.repoHeadRef ?? null,
+      syncStatus: input.repoSyncStatus ?? null,
+      lastSyncAt: input.lastRepoSyncAt?.toISOString() ?? null,
+      lastError: input.repoSyncError ?? null,
+    };
+  }
+
   isRepoAvailable(input: { repoMirrorPath?: string | null; repoSyncStatus?: RepoSyncStatus | null }) {
     return Boolean(
       input.repoMirrorPath &&

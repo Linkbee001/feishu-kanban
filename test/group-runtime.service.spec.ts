@@ -91,23 +91,22 @@ describe('GroupRuntimeService', () => {
       syncRuntimeSessionState: jest.fn().mockResolvedValue(undefined),
       syncGroupRuntimeState: jest.fn().mockResolvedValue(undefined),
     };
-    const repoSync = {
-      maybeRefreshForInteractive: jest.fn().mockResolvedValue(undefined),
-    };
     const roleProfiles = {
       compile: jest.fn().mockResolvedValue(roleProfile),
     };
     const runtimeTasks = {
       listForSession: jest.fn().mockResolvedValue([]),
     };
-    const feishu = {};
+    const feishu = {
+      addMessageReaction: jest.fn().mockResolvedValue({ data: { reaction_id: 'reaction_1' } }),
+      removeMessageReaction: jest.fn().mockResolvedValue(undefined),
+    };
     const artifactQueue = {};
 
     const service = new GroupRuntimeService(
       prisma as any,
       piMono as any,
       groupSessions as any,
-      repoSync as any,
       roleProfiles as any,
       runtimeTasks as any,
       feishu as any,
@@ -119,7 +118,6 @@ describe('GroupRuntimeService', () => {
       prisma,
       piMono,
       groupSessions,
-      repoSync,
       roleProfiles,
       session,
     };

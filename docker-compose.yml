@@ -1,7 +1,28 @@
 services:
+  migrate:
+    build: .
+    command: sh -c "npx prisma migrate deploy"
+    profiles: ["tools"]
+    env_file: .env
+    environment:
+      APP_PROCESS: migrate
+      DATABASE_URL: ${DOCKER_DATABASE_URL:?Set DOCKER_DATABASE_URL in .env, e.g. postgresql://user:pass@host.docker.internal:5432/feishu_kanban?schema=public}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://host.docker.internal:6379}
+      FEISHU_EVENT_MODE: ${FEISHU_EVENT_MODE:-webhook}
+      FEISHU_WS_EVENT_TYPES: ${FEISHU_WS_EVENT_TYPES:-im.message.receive_v1,im.chat.member.bot.added_v1,card.action.trigger}
+      PI_MONO_PROVIDER: ${PI_MONO_PROVIDER:-bailian}
+      PI_MONO_MODEL: ${PI_MONO_MODEL:-kimi-k2.5}
+      PI_MONO_THINKING_LEVEL: ${PI_MONO_THINKING_LEVEL:-off}
+      PI_MONO_WORKDIR: ${PI_MONO_WORKDIR:-/workspace}
+      PI_MONO_AGENT_DIR: ${PI_MONO_AGENT_DIR:-/workspace/.pi-agent}
+      BAILIAN_BASE_URL: ${BAILIAN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   api:
     build: .
-    command: sh -c "npx prisma migrate deploy && node dist/src/main.js"
+    command: sh -c "node dist/src/main.js"
     env_file: .env
     environment:
       APP_PROCESS: api
@@ -25,7 +46,7 @@ services:
 
   worker:
     build: .
-    command: sh -c "npx prisma migrate deploy && node dist/src/worker.js"
+    command: sh -c "node dist/src/worker.js"
     env_file: .env
     environment:
       APP_PROCESS: worker

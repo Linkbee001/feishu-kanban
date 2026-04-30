@@ -894,6 +894,28 @@ readProjectBitable(input: { appToken: string; tableId: string }): Promise<Bitabl
 
 目标是把 repo 从“每轮会话的动态前置条件”收敛成“environment 的长期能力声明”。
 
+### 11.3 后台管理看板对齐新管理模式
+
+当前后台服务层已经能返回 `runtimeState`、`runtimeEvents`、`recentRunType`、`defaultQueueMode` 等新数据，
+但正式管理看板仍主要停留在“实例 + 待办 + 最近 run / artifact”的旧展示模型，尚未完整体现 runtime-first 的管理方式。
+
+后续需要补齐的看板改造包括：
+
+- 在实例总览和基础信息中展示 `recentRunType`、`defaultQueueMode`
+- 在运行时页面展示 `runtimeState.status`、`currentTurn`、`waitingReason`、队列长度
+- 在日志页增加 `runtimeEvents` 时间线，而不只展示 messages / runs / artifacts / confirmations
+- 让运行时页明确区分“session 真状态”和“group_runtime_tasks 投影”
+- 增加 repo / workspace 状态展示，至少覆盖“未配置 / 就绪 / 错误”、最近同步错误、关联 environment
+
+目标是让后台真正围绕：
+
+- session runtime snapshot
+- runtime event log
+- task projection
+- repo / workspace capability state
+
+来组织观测与排障，而不是继续以旧式 run 列表为中心。
+
 ## 12. 最终判断
 
 这次收敛不应该继续沿着“把 group runtime 再补得更复杂”去做。

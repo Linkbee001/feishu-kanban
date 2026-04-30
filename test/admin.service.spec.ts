@@ -10,6 +10,20 @@ describe('AdminService', () => {
           ownerOpenId: 'ou_owner_1',
         }),
       },
+      projectEnvironment: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          id: 'env_1',
+          name: 'Default',
+          repoUrl: null,
+          repoBranch: null,
+          repoCredentialRef: null,
+          repoMirrorPath: null,
+          repoSyncStatus: 'uninitialized',
+          repoSyncError: null,
+          repoHeadRef: null,
+          projectPath: 'C:/workspace/feishu-kanban',
+        }),
+      },
       groupAgentSession: {
         findMany: jest.fn().mockResolvedValue([
           {
@@ -176,14 +190,27 @@ describe('AdminService', () => {
       ]),
       updateByChat: jest.fn(),
     };
+    const repoSync = {
+      getCapabilitySnapshot: jest.fn().mockReturnValue({
+        status: 'repo_unconfigured',
+        hasRepo: false,
+        repoUrl: null,
+        repoBranch: null,
+        repoHeadRef: null,
+        repoSyncError: null,
+        repoMirrorPath: null,
+        workspacePath: 'C:/workspace/feishu-kanban',
+      }),
+    };
 
     return {
-      service: new AdminService(prisma as any, runtime as any, feishu as any, policies as any, memberProfiles as any),
+      service: new AdminService(prisma as any, runtime as any, feishu as any, policies as any, memberProfiles as any, repoSync as any),
       prisma,
       runtime,
       feishu,
       policies,
       memberProfiles,
+      repoSync,
     };
   }
 
@@ -201,6 +228,10 @@ describe('AdminService', () => {
         recentSkill: 'progress-summary',
         recentRunType: 'formal_execution',
         recentArtifactSummary: 'summary:Daily digest',
+        repoCapability: expect.objectContaining({
+          status: 'repo_unconfigured',
+          hasRepo: false,
+        }),
         taskCounts: expect.objectContaining({
           queued: 1,
           running: 1,

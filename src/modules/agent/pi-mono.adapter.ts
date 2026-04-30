@@ -367,6 +367,9 @@ export class PiMonoAdapter {
       roleProfile: input.roleProfile,
     });
     const result = await this.enqueueRuntimeActor(state, async () => {
+      this.logger.log(
+        `runtime submit: session=${state.runtimeSessionKey} source=${input.envelope.messageSourceId} mode=${input.queueMode ?? 'collect'}`,
+      );
       await this.hydrateRuntimeState(state, input.contextBinding);
       state.currentContextBinding = input.contextBinding;
       state.currentMinimalContext = input.minimalContext;
@@ -1001,7 +1004,10 @@ export class PiMonoAdapter {
           throw new Error('emit_outputs called outside an active execution');
         }
         if (!['outputs', 'group_runtime'].includes(activeExecution.mode)) {
-          throw new Error('emit_outputs is only available during formal execution or group runtime turns');
+          this.logger.warn(`emit_outputs ignored outside supported mode: session=${state.runtimeSessionKey} mode=${activeExecution.mode}`);
+          return {
+            content: [{ type: 'text', text: 'emit_outputs is not available in this run mode.' }],
+          };
         }
 
         const outputs = this.normalizeOutputs(params.outputs);
@@ -1011,6 +1017,7 @@ export class PiMonoAdapter {
 
         activeExecution.outputs = outputs;
         activeExecution.emitted = true;
+        this.logger.log(`emit_outputs captured: session=${state.runtimeSessionKey} outputs=${outputs.length}`);
         return {
           content: [{ type: 'text', text: `Captured ${outputs.length} structured outputs.` }],
         };
@@ -1042,7 +1049,10 @@ export class PiMonoAdapter {
           throw new Error('emit_decision called outside an active execution');
         }
         if (activeExecution.mode !== 'decision') {
-          throw new Error('emit_decision is only available during manager decision runs');
+          this.logger.warn(`emit_decision ignored outside decision mode: session=${state.runtimeSessionKey} mode=${activeExecution.mode}`);
+          return {
+            content: [{ type: 'text', text: 'emit_decision is only available during manager decision runs.' }],
+          };
         }
 
         const decision = this.normalizeDecision(params.decision);
@@ -1052,6 +1062,7 @@ export class PiMonoAdapter {
 
         activeExecution.decision = decision;
         activeExecution.emitted = true;
+        this.logger.log(`emit_decision captured: session=${state.runtimeSessionKey} action=${decision.action}`);
         return {
           content: [{ type: 'text', text: `Captured decision: ${decision.action}` }],
         };
@@ -1063,8 +1074,8 @@ export class PiMonoAdapter {
     return {
       name: 'list_project_folder',
       label: 'list_project_folder',
-      description: 'List the Feishu project folder structure and recent readable documents.',
-      promptSnippet: 'list_project_folder(): inspect project folder entries and recent docs from Feishu.',
+      description: 'List the Feishu project folder structure and recent readable documents metadata.',
+      promptSnippet: 'list_project_folder(): inspect project folder entries and recent doc metadata from Feishu.',
       parameters: {
         type: 'object',
         properties: {},
@@ -1111,8 +1122,8 @@ export class PiMonoAdapter {
     return {
       name: 'search_project_docs',
       label: 'search_project_docs',
-      description: 'Search recent Feishu project documents by keyword.',
-      promptSnippet: 'search_project_docs({ query }): search recent project docs from Feishu.',
+      description: 'Search recent Feishu project documents by title and cached summaries. Use read_project_doc for full content.',
+      promptSnippet: 'search_project_docs({ query }): search recent project docs by metadata, then use read_project_doc on relevant tokens.',
       parameters: {
         type: 'object',
         properties: {
@@ -1266,6 +1277,9 @@ export class PiMonoAdapter {
         }
         activeExecution.actions ??= [];
         activeExecution.actions.push(action);
+        this.logger.log(
+          `todo_write captured: session=${state.runtimeSessionKey} action=${action.action} task=${action.taskId ?? 'unknown'}`,
+        );
         return {
           content: [{ type: 'text', text: `Queued todo action: ${action.action}` }],
         };
@@ -1298,6 +1312,7 @@ export class PiMonoAdapter {
         }
         activeExecution.actions ??= [];
         activeExecution.actions.push({ type: 'reply_group', text });
+        this.logger.log(`reply_group captured: session=${state.runtimeSessionKey} length=${text.length}`);
         return {
           content: [{ type: 'text', text: 'Queued one group reply.' }],
         };
@@ -1335,6 +1350,9 @@ export class PiMonoAdapter {
         }
         activeExecution.actions ??= [];
         activeExecution.actions.push(action);
+        this.logger.log(
+          `request_group_confirmation captured: session=${state.runtimeSessionKey} task=${action.taskId ?? 'none'} action=${action.actionType}`,
+        );
         return {
           content: [{ type: 'text', text: `Queued confirmation request for ${action.actionType}.` }],
         };
@@ -1526,6 +1544,7 @@ export class PiMonoAdapter {
     const requestKind = payload.requestKind ?? 'formal_execution';
     const decisionMode = requestKind === 'interactive_decision';
     const groupRuntimeMode = requestKind === 'group_runtime';
+    const repoCapabilityState = this.describeRepoCapabilityState(payload);
     const promptGuidance = decisionMode
       ? [
           'You are the manager agent for a Feishu project collaboration workspace.',
@@ -1536,6 +1555,14 @@ export class PiMonoAdapter {
           'Call emit_decision exactly once with the final structured decision.',
           'Do not call emit_outputs during manager decision runs.',
         ]
+      : groupRuntimeMode
+        ? [
+            'You are running as PiMono for the Feishu project collaboration backend.',
+            'This turn is a group runtime turn, not a formal execution run.',
+            'Prefer concise group replies, runtime todo updates, and lightweight progress over large formal deliverables.',
+            'Only call emit_outputs if a persisted formal artifact is genuinely needed for the user request.',
+            'Do not generate a large formal document by default during group runtime turns.',
+          ]
       : [
           'You are running as PiMono for the Feishu project collaboration backend.',
           'This turn is a formal execution run that may produce persisted artifacts.',
@@ -1560,6 +1587,17 @@ export class PiMonoAdapter {
     return [
       ...promptGuidance,
       ...groupRuntimeGuidance,
+      '',
+      '## Execution Bias',
+      ...this.buildExecutionBiasLines(requestKind),
+      '',
+      '## Tooling',
+      ...this.buildToolingLines(payload, groupRuntimeMode),
+      '',
+      '## Runtime Policy',
+      ...this.buildRuntimePolicyLines(payload, requestKind, repoCapabilityState),
+      '',
+      '## Runtime Context',
       `Runtime session: ${payload.runtimeSessionKey}`,
       `Agent scope: ${payload.agentScopeKey ?? 'not configured'}`,
       `Session mode: ${payload.sessionMode ?? 'active'}`,
@@ -1570,20 +1608,12 @@ export class PiMonoAdapter {
       `Environment: ${payload.environment.name} (${payload.environment.id})`,
       `Repository: ${payload.environment.repoUrl ?? 'not configured'}`,
       `Branch: ${payload.environment.repoBranch ?? 'not configured'}`,
+      `Repo capability state: ${repoCapabilityState}`,
       `Repo mirror path: ${payload.environment.repoMirrorPath ?? 'not prepared'}`,
       `Repo sync status: ${payload.minimalContext?.repoReady ? 'ready' : payload.environment.repoSyncStatus ?? 'unknown'}`,
       `Repo head: ${payload.minimalContext?.repoHeadRef ?? payload.environment.repoHeadRef ?? 'unknown'}`,
       `Intent: ${payload.intent}`,
-      '',
-      'Available built-in tools are read-only: read, grep, find, ls.',
-      'Available Feishu tools are on-demand only: list_project_folder, read_project_doc, search_project_docs, read_project_bitable, list_recent_project_artifacts.',
-      groupRuntimeMode
-        ? 'Runtime tools are available: todo_list, todo_write, reply_group, request_group_confirmation, emit_outputs.'
-        : 'Runtime tools are disabled for this request kind.',
-      payload.environment.repoMirrorPath && payload.environment.repoSyncStatus === 'ready'
-        ? 'Use the current local repo mirror as the source of truth for code inspection.'
-        : 'Code context is not currently available from a ready local repo mirror. Do not assume repository contents; use only what you can verify.',
-      'Feishu project materials are not mirrored locally. Query them with tools only when needed.',
+      groupRuntimeMode ? `Runtime task snapshot count: ${payload.runtimeTasks?.length ?? 0}` : undefined,
       payload.minimalContext?.sessionMemorySummary
         ? `Session memory summary: ${payload.minimalContext.sessionMemorySummary}`
         : 'Session memory summary: none',
@@ -1595,6 +1625,93 @@ export class PiMonoAdapter {
       'User request:',
       payload.prompt,
     ].join('\n');
+  }
+
+  private buildExecutionBiasLines(requestKind: PiMonoCreateRunRequest['requestKind']) {
+    const base = [
+      '- Actionable request: act in this turn.',
+      '- Continue until done or genuinely blocked; do not stop at a plan when tools can advance the work.',
+      '- Weak or empty tool results: vary the query, path, or source before concluding.',
+      '- Mutable facts require live verification through the tools available in this runtime.',
+    ];
+
+    if (requestKind === 'interactive_decision') {
+      return [
+        ...base,
+        '- This is a decision turn: end with exactly one emit_decision call, not emit_outputs.',
+        '- Ask for only the one missing decision that genuinely blocks safe execution.',
+      ];
+    }
+
+    if (requestKind === 'group_runtime') {
+      return [
+        ...base,
+        '- Prefer advancing the runtime queue and current todo state in this turn.',
+        '- For longer work, send concise user-facing progress only when it materially helps; otherwise keep progress in runtime events and todo state.',
+        '- Final runtime completion should be backed by tool effects, runtime state changes, or emitted outputs.',
+      ];
+    }
+
+    return [
+      ...base,
+      '- Final execution needs evidence: emitted outputs, verified file inspection, repo inspection, or a named blocker.',
+      '- If no formal document, task, file, or log is needed, still emit one summary output with concrete evidence.',
+    ];
+  }
+
+  private buildToolingLines(payload: PiMonoCreateRunRequest, groupRuntimeMode: boolean) {
+    return [
+      '- Built-in local tools: read, grep, find, ls.',
+      '- Feishu tools are on-demand only: list_project_folder, read_project_doc, search_project_docs, read_project_bitable, list_recent_project_artifacts.',
+      groupRuntimeMode
+        ? '- Runtime tools: todo_list, todo_write, reply_group, request_group_confirmation, emit_outputs.'
+        : '- Runtime tools for queue and group replies are not available in this request kind.',
+      payload.environment.repoMirrorPath && payload.environment.repoSyncStatus === 'ready'
+        ? '- Repo inspection is available through the ready local repo mirror; use it as the source of truth for code facts.'
+        : '- Repo inspection is not currently available from a ready local mirror; do not assume repository contents.',
+      '- Feishu project materials are not mirrored into prompt context; retrieve them only when needed.',
+    ];
+  }
+
+  private buildRuntimePolicyLines(
+    payload: PiMonoCreateRunRequest,
+    requestKind: PiMonoCreateRunRequest['requestKind'],
+    repoCapabilityState: string,
+  ) {
+    const lines = [
+      `- Repo capability state is ${repoCapabilityState}; align your behavior to it instead of assuming code access.`,
+      '- Do not fabricate code, files, or external project facts that were not verified in this turn.',
+      '- Respect tool boundaries: use on-demand retrieval instead of asking for bulk context by default.',
+    ];
+
+    if (requestKind === 'group_runtime') {
+      lines.push('- Human confirmation must go through request_group_confirmation and then stop the blocked task in waiting_confirmation.');
+      lines.push('- Keep at most one runtime todo in running state at a time.');
+      lines.push('- reply_group should stay concise and only contain user-facing progress or conclusions.');
+    }
+
+    if (requestKind === 'interactive_decision') {
+      lines.push('- Do not start formal execution in a decision turn; decide only the next safe interaction step.');
+    }
+
+    if (requestKind === 'formal_execution') {
+      lines.push('- Formal execution should finish with emit_outputs exactly once when the result is ready.');
+    }
+
+    return lines;
+  }
+
+  private describeRepoCapabilityState(payload: PiMonoCreateRunRequest) {
+    if (!payload.environment.repoUrl?.trim()) {
+      return 'repo_unconfigured';
+    }
+    if (payload.environment.repoSyncStatus === 'ready' || payload.minimalContext?.repoReady) {
+      return 'repo_ready';
+    }
+    if (payload.environment.repoSyncStatus === 'error') {
+      return 'repo_error';
+    }
+    return 'repo_initializing';
   }
 
   private buildFallbackOutputs(text?: string | null): AgentOutput[] {
@@ -1872,6 +1989,14 @@ export class PiMonoAdapter {
   }) {
     const state = input.state;
     const turn = state.currentTurn;
+    const contextBinding = state.currentContextBinding
+      ? {
+          projectId: state.currentContextBinding.projectId,
+          environmentId: state.currentContextBinding.environmentId,
+          feishuChatId: state.currentContextBinding.feishuChatId,
+          groupSessionId: state.currentContextBinding.groupSessionId ?? null,
+        }
+      : undefined;
     if (!turn) {
       return;
     }
@@ -1881,6 +2006,9 @@ export class PiMonoAdapter {
       messageSourceId: turn.messageSourceId,
       queueLength: state.queue.length,
     });
+    this.logger.log(
+      `runtime turn started: session=${state.runtimeSessionKey} turn=${turn.turnId} source=${turn.messageSourceId ?? 'unknown'} queue=${state.queue.length}`,
+    );
 
     try {
       const result = await this.executeGroupRuntimePrompt({
@@ -1902,28 +2030,47 @@ export class PiMonoAdapter {
           prompt: input.reasonText,
           outputSchema: {},
         },
-        timeoutMs: 60_000,
+        timeoutMs: this.resolveGroupRuntimeTimeoutMs(),
       });
+      this.logger.log(
+        `runtime turn result: session=${state.runtimeSessionKey} turn=${turn.turnId} status=${result.status} actions=${result.actions.length} outputs=${result.outputs?.length ?? 0}`,
+      );
 
       if (result.status !== 'succeeded') {
+        const salvaged = this.hasSalvageableRuntimeResult(result);
+        if (salvaged) {
+          await this.applyRuntimeTurnResult(state, result, input.source.messageSourceId ?? null, contextBinding);
+        }
+        if (result.status === 'timeout' && !salvaged) {
+          await this.recordRuntimeEvent(state, 'reply_emitted', {
+            text: '这条请求处理超时了。我已经停止本轮执行，请稍后重试，或者把问题拆小一点继续发给我。',
+            messageSourceId: input.source.messageSourceId ?? null,
+          });
+        }
         await this.recordRuntimeEvent(state, 'turn_failed', {
           turnId: turn.turnId,
           status: result.status,
-        });
+          salvaged,
+        }, contextBinding);
       } else {
-        await this.applyRuntimeTurnResult(state, result, input.source.messageSourceId ?? null);
+        await this.applyRuntimeTurnResult(state, result, input.source.messageSourceId ?? null, contextBinding);
         if (!state.waitingReason) {
           await this.recordRuntimeEvent(state, 'turn_completed', {
             turnId: turn.turnId,
             outputSummary: result.outputSummary ?? null,
-          });
+          }, contextBinding);
         }
       }
     } catch (error) {
+      this.logger.warn(
+        `runtime turn exception: session=${state.runtimeSessionKey} turn=${turn.turnId} ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
       await this.recordRuntimeEvent(state, 'turn_failed', {
         turnId: turn.turnId,
         errorMessage: error instanceof Error ? error.message : String(error),
-      });
+      }, contextBinding);
       this.logger.warn(
         `Runtime turn ${turn.turnId} failed in session ${state.runtimeSessionKey}: ${
           error instanceof Error ? error.message : String(error)
@@ -1931,6 +2078,9 @@ export class PiMonoAdapter {
       );
     } finally {
       state.currentTurn = undefined;
+      this.logger.log(
+        `runtime turn finalized: session=${state.runtimeSessionKey} waiting=${state.waitingReason ? 'yes' : 'no'} queued=${state.queue.length}`,
+      );
       if (!state.waitingReason) {
         await this.startNextQueuedTurn(state, input.project, input.environment, input.roleProfile, input.minimalContext);
       }
@@ -1983,27 +2133,44 @@ export class PiMonoAdapter {
     ].join('\n');
   }
 
+  private hasSalvageableRuntimeResult(result: GroupRuntimeTurnResult) {
+    return (result.actions?.length ?? 0) > 0 || (result.outputs?.length ?? 0) > 0;
+  }
+
   private async applyRuntimeTurnResult(
     state: SessionRuntimeState,
     result: GroupRuntimeTurnResult,
     messageSourceId: string | null,
+    contextBinding?: RuntimeContextBinding,
   ) {
     for (const action of result.actions) {
       if (action.type === 'todo_write') {
         const snapshot = action.taskId ? this.findRuntimeTaskSnapshot(state, action.taskId) : null;
-        await this.recordRuntimeEvent(state, 'todo_changed', {
-          action: action.action,
-          task: snapshot,
-          messageSourceId,
-        });
+        await this.recordRuntimeEvent(
+          state,
+          'todo_changed',
+          {
+            action: action.action,
+            task: snapshot,
+            messageSourceId,
+            feishuChatId: contextBinding?.feishuChatId ?? null,
+          },
+          contextBinding,
+        );
         continue;
       }
 
       if (action.type === 'reply_group') {
-        await this.recordRuntimeEvent(state, 'reply_emitted', {
-          text: action.text,
-          messageSourceId,
-        });
+        await this.recordRuntimeEvent(
+          state,
+          'reply_emitted',
+          {
+            text: action.text,
+            messageSourceId,
+            feishuChatId: contextBinding?.feishuChatId ?? null,
+          },
+          contextBinding,
+        );
         continue;
       }
 
@@ -2016,37 +2183,61 @@ export class PiMonoAdapter {
             snapshot.resultSummary = 'Waiting for confirmation';
             state.waitingTaskId = snapshot.id;
             state.waitingReason = snapshot.blockedReason ?? action.summary;
-            await this.recordRuntimeEvent(state, 'todo_changed', {
-              action: 'waiting_confirmation',
-              task: snapshot,
-              messageSourceId,
-            });
+            await this.recordRuntimeEvent(
+              state,
+              'todo_changed',
+              {
+                action: 'waiting_confirmation',
+                task: snapshot,
+                messageSourceId,
+                feishuChatId: contextBinding?.feishuChatId ?? null,
+              },
+              contextBinding,
+            );
           }
         } else {
           state.waitingReason = action.summary;
         }
 
-        await this.recordRuntimeEvent(state, 'confirmation_requested', {
-          taskId: action.taskId ?? null,
-          actionType: action.actionType,
-          summary: action.summary,
-          detail: action.detail ?? null,
-          payload: action.payload,
-          messageSourceId,
-        });
-        await this.recordRuntimeEvent(state, 'session_waiting', {
-          taskId: action.taskId ?? null,
-          reason: action.summary,
-        });
+        await this.recordRuntimeEvent(
+          state,
+          'confirmation_requested',
+          {
+            taskId: action.taskId ?? null,
+            actionType: action.actionType,
+            summary: action.summary,
+            detail: action.detail ?? null,
+            payload: action.payload,
+            messageSourceId,
+            feishuChatId: contextBinding?.feishuChatId ?? null,
+          },
+          contextBinding,
+        );
+        await this.recordRuntimeEvent(
+          state,
+          'session_waiting',
+          {
+            taskId: action.taskId ?? null,
+            reason: action.summary,
+            feishuChatId: contextBinding?.feishuChatId ?? null,
+          },
+          contextBinding,
+        );
       }
     }
 
     if (result.outputs?.length) {
-      await this.recordRuntimeEvent(state, 'outputs_emitted', {
-        outputs: result.outputs,
-        messageSourceId,
-        taskId: this.findActiveRuntimeTaskId(state),
-      });
+      await this.recordRuntimeEvent(
+        state,
+        'outputs_emitted',
+        {
+          outputs: result.outputs,
+          messageSourceId,
+          taskId: this.findActiveRuntimeTaskId(state),
+          feishuChatId: contextBinding?.feishuChatId ?? null,
+        },
+        contextBinding,
+      );
     }
   }
 
@@ -2126,6 +2317,7 @@ export class PiMonoAdapter {
     state: SessionRuntimeState,
     type: RuntimeEventType,
     payload: Record<string, unknown>,
+    contextBinding?: RuntimeContextBinding,
   ) {
     const event: RuntimeEvent = {
       sequence: state.eventSequence + 1,
@@ -2138,50 +2330,56 @@ export class PiMonoAdapter {
     if (state.recentEvents.length > 100) {
       state.recentEvents.splice(0, state.recentEvents.length - 100);
     }
+    this.logger.log(`runtime event: session=${state.runtimeSessionKey} seq=${event.sequence} type=${event.type}`);
+
+    const eventContext = contextBinding ?? state.currentContextBinding;
 
     await (this.prisma as any).runtimeEvent.create({
       data: {
         runtimeSessionKey: state.runtimeSessionKey,
-        groupSessionId: state.currentContextBinding?.groupSessionId ?? null,
-        projectId: state.currentContextBinding?.projectId ?? null,
-        environmentId: state.currentContextBinding?.environmentId ?? null,
+        groupSessionId: eventContext?.groupSessionId ?? null,
+        projectId: eventContext?.projectId ?? null,
+        environmentId: eventContext?.environmentId ?? null,
         sequence: event.sequence,
         eventType: event.type,
         payload: event.payload as any,
       },
     });
 
-    await this.projectRuntimeEvent(state, event);
+    await this.projectRuntimeEvent(state, event, eventContext);
+    await this.syncRuntimeSessionProjection(state, event, eventContext);
   }
 
-  private async projectRuntimeEvent(state: SessionRuntimeState, event: RuntimeEvent) {
+  private async projectRuntimeEvent(state: SessionRuntimeState, event: RuntimeEvent, contextBinding?: RuntimeContextBinding) {
     if (event.type === 'reply_emitted') {
       const chatId =
         typeof event.payload.feishuChatId === 'string'
           ? event.payload.feishuChatId
-          : state.currentContextBinding?.feishuChatId;
+          : contextBinding?.feishuChatId ?? state.currentContextBinding?.feishuChatId;
       const text = typeof event.payload.text === 'string' ? event.payload.text : null;
       if (chatId && text) {
+        this.logger.log(`sending group reply: session=${state.runtimeSessionKey} chat=${chatId} length=${text.length}`);
         await this.feishu.sendTextMessage('chat_id', chatId, text);
       }
       return;
     }
 
     if (event.type === 'todo_changed') {
+      const binding = contextBinding ?? state.currentContextBinding;
       const task =
         event.payload.task && typeof event.payload.task === 'object' && !Array.isArray(event.payload.task)
           ? (event.payload.task as GroupRuntimeTaskSnapshot)
           : null;
-      if (!task || !state.currentContextBinding?.groupSessionId) {
+      if (!task || !binding?.groupSessionId) {
         return;
       }
       await this.prisma.groupRuntimeTask.upsert({
         where: { id: task.id },
         create: {
           id: task.id,
-          groupSessionId: state.currentContextBinding.groupSessionId,
-          projectId: state.currentContextBinding.projectId,
-          environmentId: state.currentContextBinding.environmentId,
+          groupSessionId: binding.groupSessionId,
+          projectId: binding.projectId,
+          environmentId: binding.environmentId,
           messageSourceId:
             typeof event.payload.messageSourceId === 'string' ? event.payload.messageSourceId : null,
           title: task.title,
@@ -2222,17 +2420,94 @@ export class PiMonoAdapter {
     }
 
     if (event.type === 'confirmation_requested') {
-      await this.createRuntimeConfirmation(state, event.payload);
+      await this.createRuntimeConfirmation(state, event.payload, contextBinding);
       return;
     }
 
     if (event.type === 'outputs_emitted') {
-      await this.createRuntimeAuditRun(state, event.payload);
+      await this.createRuntimeAuditRun(state, event.payload, contextBinding);
     }
   }
 
-  private async createRuntimeConfirmation(state: SessionRuntimeState, payload: Record<string, unknown>) {
-    const chatId = state.currentContextBinding?.feishuChatId;
+  private async syncRuntimeSessionProjection(
+    state: SessionRuntimeState,
+    event: RuntimeEvent,
+    contextBinding?: RuntimeContextBinding,
+  ) {
+    const groupSessionId = contextBinding?.groupSessionId ?? state.currentContextBinding?.groupSessionId;
+    if (!groupSessionId) {
+      return;
+    }
+
+    const existing = await this.prisma.groupAgentSession.findUnique({
+      where: { id: groupSessionId },
+      select: { runtimeStateJson: true },
+    });
+    const existingState =
+      existing?.runtimeStateJson &&
+      typeof existing.runtimeStateJson === 'object' &&
+      !Array.isArray(existing.runtimeStateJson)
+        ? ({ ...(existing.runtimeStateJson as Record<string, unknown>) })
+        : {};
+
+    const snapshot = this.buildRuntimeStateSnapshot(state) as unknown as Record<string, unknown>;
+    const nextState: Record<string, unknown> = {
+      ...existingState,
+      runtimeSessionKey: snapshot.runtimeSessionKey,
+      piSessionId: snapshot.piSessionId,
+      status: snapshot.status,
+      queue: snapshot.queue,
+      isStreaming: snapshot.isStreaming,
+      isCompacting: snapshot.isCompacting,
+      memorySummary: snapshot.memorySummary ?? null,
+      currentTurn: snapshot.currentTurn ?? null,
+      waitingReason: snapshot.waitingReason ?? null,
+    };
+
+    if (event.type === 'turn_completed' || event.type === 'turn_failed' || event.type === 'session_waiting') {
+      await this.clearRuntimeProcessingReaction(nextState);
+    }
+
+    await this.prisma.groupAgentSession.update({
+      where: { id: groupSessionId },
+      data: {
+        currentRuntimeTaskId: this.findActiveRuntimeTaskId(state),
+        runtimeStateJson: nextState as any,
+        lastRuntimeTurnAt: new Date(),
+      },
+    });
+  }
+
+  private async clearRuntimeProcessingReaction(runtimeState: Record<string, unknown>) {
+    const reaction =
+      runtimeState.processingReaction &&
+      typeof runtimeState.processingReaction === 'object' &&
+      !Array.isArray(runtimeState.processingReaction)
+        ? (runtimeState.processingReaction as Record<string, unknown>)
+        : null;
+    const messageId = typeof reaction?.feishuMessageId === 'string' ? reaction.feishuMessageId : null;
+    const reactionId = typeof reaction?.reactionId === 'string' ? reaction.reactionId : null;
+    if (messageId && reactionId) {
+      try {
+        await this.feishu.removeMessageReaction(messageId, reactionId);
+      } catch (error) {
+        this.logger.warn(
+          `Failed to clear processing reaction ${reactionId} for message ${messageId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    delete runtimeState.processingReaction;
+  }
+
+  private async createRuntimeConfirmation(
+    state: SessionRuntimeState,
+    payload: Record<string, unknown>,
+    contextBinding?: RuntimeContextBinding,
+  ) {
+    const binding = contextBinding ?? state.currentContextBinding;
+    const chatId = binding?.feishuChatId;
     const messageSourceId = typeof payload.messageSourceId === 'string' ? payload.messageSourceId : null;
     if (!chatId || !messageSourceId) {
       return;
@@ -2241,8 +2516,8 @@ export class PiMonoAdapter {
     const expiresAt = new Date(Date.now() + ttl * 60_000);
     const confirmation = await this.prisma.confirmationRequest.create({
       data: {
-        projectId: state.currentContextBinding?.projectId,
-        environmentId: state.currentContextBinding?.environmentId,
+        projectId: binding?.projectId,
+        environmentId: binding?.environmentId,
         messageSourceId,
         groupRuntimeTaskId: typeof payload.taskId === 'string' ? payload.taskId : null,
         actionType: typeof payload.actionType === 'string' ? payload.actionType : 'runtime_confirmation',
@@ -2314,8 +2589,13 @@ export class PiMonoAdapter {
     };
   }
 
-  private async createRuntimeAuditRun(state: SessionRuntimeState, payload: Record<string, unknown>) {
-    if (!state.currentContextBinding?.projectId || !state.currentContextBinding.environmentId) {
+  private async createRuntimeAuditRun(
+    state: SessionRuntimeState,
+    payload: Record<string, unknown>,
+    contextBinding?: RuntimeContextBinding,
+  ) {
+    const binding = contextBinding ?? state.currentContextBinding;
+    if (!binding?.projectId || !binding.environmentId) {
       return;
     }
     const outputs = Array.isArray(payload.outputs) ? this.normalizeOutputs(payload.outputs) : [];
@@ -2326,8 +2606,8 @@ export class PiMonoAdapter {
     const task = taskId ? this.findRuntimeTaskSnapshot(state, taskId) : null;
     const run = await this.prisma.agentRun.create({
       data: {
-        projectId: state.currentContextBinding.projectId,
-        environmentId: state.currentContextBinding.environmentId,
+        projectId: binding.projectId,
+        environmentId: binding.environmentId,
         messageSourceId:
           typeof payload.messageSourceId === 'string' ? payload.messageSourceId : null,
         groupRuntimeTaskId: taskId,
@@ -2429,6 +2709,20 @@ export class PiMonoAdapter {
 
   private resolveTimeoutMs() {
     return (this.config.get<number>('AGENT_RUN_TIMEOUT_SECONDS') ?? 1800) * 1000;
+  }
+
+  private resolveGroupRuntimeTimeoutMs() {
+    const configuredMs = this.config.get<number>('PI_MONO_GROUP_RUNTIME_TIMEOUT_MS');
+    if (typeof configuredMs === 'number' && Number.isFinite(configuredMs) && configuredMs >= 1_000) {
+      return configuredMs;
+    }
+
+    const configuredSeconds = this.config.get<number>('PI_MONO_GROUP_RUNTIME_TIMEOUT_SECONDS');
+    if (typeof configuredSeconds === 'number' && Number.isFinite(configuredSeconds) && configuredSeconds >= 30) {
+      return configuredSeconds * 1000;
+    }
+
+    return 120_000;
   }
 
   private cancelTtlSeconds() {

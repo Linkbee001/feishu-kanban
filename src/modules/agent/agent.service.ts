@@ -94,22 +94,9 @@ export class AgentService {
 
     let retainLock = false;
     try {
-      const interactiveRepoRefresh = await this.repoSync.maybeRefreshForInteractive({
-        projectId: project.id,
-        environmentId: environment.id,
-        repoUrl: environment.repoUrl,
-        repoBranch: environment.repoBranch,
-        repoCredentialRef: environment.repoCredentialRef,
-        lastRepoSyncAt: environment.lastRepoSyncAt,
-        repoSyncStatus: environment.repoSyncStatus,
-      });
-      const refreshedEnvironment =
-        interactiveRepoRefresh.attempted || environment.repoMirrorPath === null
-          ? await this.prisma.projectEnvironment.findUniqueOrThrow({ where: { id: environment.id } })
-          : environment;
       const projectContextBundle = await this.runtimeContext.assemble({
         projectId: project.id,
-        environmentId: refreshedEnvironment.id,
+        environmentId: environment.id,
         runtimeSessionKey: session.runtimeSessionKey,
         sessionMode: session.sessionMode,
         sessionStatus: this.runtimeContext.toSessionStatus(session.status),
@@ -124,20 +111,20 @@ export class AgentService {
         projectContextBundle,
         project: { id: project.id, name: project.name, feishuChatId: project.feishuChatId },
         environment: {
-          id: refreshedEnvironment.id,
-          name: refreshedEnvironment.name,
-          piMonoEnvId: refreshedEnvironment.piMonoEnvId,
-          repoUrl: refreshedEnvironment.repoUrl,
-          repoBranch: refreshedEnvironment.repoBranch,
-          repoCredentialRef: refreshedEnvironment.repoCredentialRef,
-          repoMirrorPath: refreshedEnvironment.repoMirrorPath,
-          repoSyncStatus: refreshedEnvironment.repoSyncStatus,
-          repoSyncError: refreshedEnvironment.repoSyncError,
-          repoHeadRef: refreshedEnvironment.repoHeadRef,
-          projectPath: refreshedEnvironment.projectPath,
-          modelEndpoint: refreshedEnvironment.modelEndpoint,
-          modelName: refreshedEnvironment.modelName,
-          skillSet: refreshedEnvironment.skillSet,
+          id: environment.id,
+          name: environment.name,
+          piMonoEnvId: environment.piMonoEnvId,
+          repoUrl: environment.repoUrl,
+          repoBranch: environment.repoBranch,
+          repoCredentialRef: environment.repoCredentialRef,
+          repoMirrorPath: environment.repoMirrorPath,
+          repoSyncStatus: environment.repoSyncStatus,
+          repoSyncError: environment.repoSyncError,
+          repoHeadRef: environment.repoHeadRef,
+          projectPath: environment.projectPath,
+          modelEndpoint: environment.modelEndpoint,
+          modelName: environment.modelName,
+          skillSet: environment.skillSet,
         },
         source: {
           messageSourceId: input.messageSourceId,
@@ -147,7 +134,7 @@ export class AgentService {
         prompt: this.buildInteractivePrompt({
           rawText: input.prompt,
           memorySummary: projectContextBundle.session.memorySummary ?? session.memorySummary ?? null,
-          environment: refreshedEnvironment,
+          environment,
         }),
       });
 
@@ -203,7 +190,7 @@ export class AgentService {
       const queued = await this.queueGroupExecution({
         session,
         project,
-        environment: refreshedEnvironment,
+        environment,
         lockToken,
         messageSourceId: input.messageSourceId,
         prompt: this.buildExecutionPrompt(input.prompt, decision),
@@ -403,17 +390,23 @@ export class AgentService {
     rawText: string;
     memorySummary?: string | null;
     environment: {
+      repoUrl?: string | null;
       repoMirrorPath?: string | null;
       repoSyncStatus?: string | null;
       repoSyncError?: string | null;
       repoHeadRef?: string | null;
     };
   }) {
+    const repoCapability = this.repoSync.getCapabilityState({
+      repoUrl: input.environment.repoUrl,
+      repoSyncStatus: input.environment.repoSyncStatus,
+    });
     return [
       'This is an interactive manager decision turn for a Feishu project workspace.',
       'Decide whether to ask a follow-up question, request confirmation, or execute immediately.',
       'If the request is ambiguous or missing key constraints, prefer ask_followup.',
       input.memorySummary ? `Session memory summary: ${input.memorySummary}` : 'Session memory summary: none',
+      `Repo capability state: ${repoCapability}`,
       `Repo mirror path: ${input.environment.repoMirrorPath ?? 'not prepared'}`,
       `Repo sync status: ${input.environment.repoSyncStatus ?? 'unknown'}`,
       `Repo head: ${input.environment.repoHeadRef ?? 'unknown'}`,

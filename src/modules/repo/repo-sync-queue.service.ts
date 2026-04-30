@@ -11,7 +11,7 @@ export class RepoSyncQueueService {
     await this.queue.add(
       force ? 'sync-repo-force' : 'sync-repo',
       { projectId, environmentId, force },
-      { jobId: `${environmentId}:${force ? 'force' : 'light'}` },
+      { jobId: `${environmentId}-${force ? 'force' : 'light'}` },
     );
   }
 }
