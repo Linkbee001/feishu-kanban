@@ -11,6 +11,8 @@ export const envValidationSchema = Joi.object({
   FEISHU_WS_EVENT_TYPES: Joi.string().allow('').default('im.message.receive_v1,im.chat.member.bot.added_v1,card.action.trigger'),
   FEISHU_APP_ID: Joi.string().allow('').required(),
   FEISHU_APP_SECRET: Joi.string().allow('').required(),
+  FEISHU_BOT_OPEN_ID: Joi.string().allow('').default(''),
+  FEISHU_BOT_NAME: Joi.string().allow('').default('Kanban'),
   FEISHU_VERIFICATION_TOKEN: Joi.string().allow('').required(),
   FEISHU_ENCRYPT_KEY: Joi.string().allow('').required(),
   PI_MONO_PROVIDER: Joi.string().allow('').default('bailian'),

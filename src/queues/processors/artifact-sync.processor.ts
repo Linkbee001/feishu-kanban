@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { AgentRunStatus, ArtifactStatus } from '@prisma/client';
+import { AgentRunStatus, ArtifactStatus, ArtifactType } from '@prisma/client';
 import { Job } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AgentService } from '../../modules/agent/agent.service';
@@ -78,19 +78,21 @@ export class ArtifactSyncProcessor extends WorkerHost {
 
     await this.agent.transition(run.id, AgentRunStatus.succeeded, { progress: 100, finishedAt: new Date() });
 
-    if (run.messageSource?.feishuChatId) {
-      const links = synced.map((artifact) => this.formatArtifactLine(artifact)).join('\n');
-      await this.feishu.sendTextMessage(
-        'chat_id',
-        run.messageSource.feishuChatId,
-        `Execution completed: ${run.intent}\nEnvironment: ${run.environment.name}\nRun ID: ${run.id}\n${links}`,
-      );
-      return;
-    }
-
     const digestSummary = this.getDigestSummaryOutput(outputs);
     if (digestSummary && run.project.feishuChatId) {
       await this.feishu.sendTextMessage('chat_id', run.project.feishuChatId, digestSummary.content ?? digestSummary.title);
+      return;
+    }
+
+    if (
+      run.messageSource?.feishuChatId &&
+      synced.some((artifact) => artifact.status === ArtifactStatus.synced) &&
+      !(await this.hasExplicitGroupReply(run))
+    ) {
+      const autoReply = this.buildAutoReply(synced);
+      if (autoReply) {
+        await this.feishu.sendTextMessage('chat_id', run.messageSource.feishuChatId, autoReply);
+      }
     }
   }
 
@@ -114,8 +116,93 @@ export class ArtifactSyncProcessor extends WorkerHost {
     return summary;
   }
 
-  private formatArtifactLine(artifact: SyncedArtifact) {
-    const target = artifact.feishuUrl ?? artifact.bitableRecordId ?? artifact.fileKey;
-    return target ? `${artifact.title}: ${target}` : `${artifact.title}: synced`;
+  private async hasExplicitGroupReply(run: {
+    id: string;
+    runType?: string | null;
+    projectId?: string;
+    messageSourceId?: string | null;
+    startedAt?: Date | null;
+    rawOutputs?: unknown;
+  }) {
+    const outputs = (run.rawOutputs as AgentOutput[] | null) ?? [];
+    if (this.getDigestSummaryOutput(outputs)) {
+      return true;
+    }
+
+    if (!run.messageSourceId || !run.projectId) {
+      return false;
+    }
+
+    const since = run.startedAt ? new Date(run.startedAt.getTime() - 10 * 60_000) : new Date(Date.now() - 10 * 60_000);
+    const events = await (this.prisma as any).runtimeEvent.findMany({
+      where: {
+        projectId: run.projectId,
+        eventType: 'reply_emitted',
+        createdAt: { gte: since },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+      take: 20,
+      select: {
+        payload: true,
+      },
+    });
+
+    return events.some((event: any) => {
+      const payload =
+        event?.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+          ? (event.payload as Record<string, unknown>)
+          : null;
+      return payload?.messageSourceId === run.messageSourceId;
+    });
+  }
+
+  private buildAutoReply(synced: SyncedArtifact[]) {
+    const successful = synced.filter((artifact) => artifact.status === ArtifactStatus.synced);
+    if (!successful.length) {
+      return null;
+    }
+
+    const documents = successful.filter((artifact) => this.toArtifactType(artifact) === ArtifactType.document);
+    const tasks = successful.filter((artifact) => this.toArtifactType(artifact) === ArtifactType.task);
+    const files = successful.filter((artifact) => this.toArtifactType(artifact) === ArtifactType.file);
+
+    if (documents.length === 1 && !tasks.length && !files.length) {
+      const document = documents[0];
+      return document.feishuUrl
+        ? `已生成《${document.title}》，并已沉淀到项目文档：${document.feishuUrl}`
+        : `已生成《${document.title}》，并已沉淀到项目文档。`;
+    }
+
+    if (tasks.length && !documents.length && !files.length) {
+      return tasks.length === 1
+        ? '已整理 1 项任务，并写入任务板。'
+        : `已整理 ${tasks.length} 项任务，并写入任务板。`;
+    }
+
+    const parts: string[] = [];
+    if (documents.length) {
+      parts.push(documents.length === 1 ? '1 份文档' : `${documents.length} 份文档`);
+    }
+    if (tasks.length) {
+      parts.push(tasks.length === 1 ? '1 项任务' : `${tasks.length} 项任务`);
+    }
+    if (files.length) {
+      parts.push(files.length === 1 ? '1 个文件' : `${files.length} 个文件`);
+    }
+    return parts.length ? `已完成正式产出：${parts.join('、')}。` : null;
+  }
+
+  private toArtifactType(artifact: SyncedArtifact) {
+    const metadata =
+      artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+        ? (artifact.metadata as Record<string, unknown>)
+        : null;
+    return metadata?.type === 'task'
+      ? ArtifactType.task
+      : metadata?.type === 'file'
+        ? ArtifactType.file
+        : metadata?.type === 'document'
+          ? ArtifactType.document
+          : ArtifactType.summary;
   }
 }

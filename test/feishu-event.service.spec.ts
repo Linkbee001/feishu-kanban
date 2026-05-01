@@ -16,7 +16,7 @@ describe('FeishuEventService', () => {
       }>;
     },
   ) => ({
-    header: { event_id: 'evt_1' },
+    header: { event_id: 'evt_1', app_id: 'app_kanban' },
     event: {
       message: {
         chat_id: chatType === 'group' ? 'chat_1' : 'ou_sender',
@@ -36,7 +36,40 @@ describe('FeishuEventService', () => {
     },
   });
 
+  const createBotAddedPayload = (options?: {
+    chatId?: string;
+    appId?: string;
+    operatorOpenId?: string;
+  }) => ({
+    header: {
+      event_id: 'evt_bot_added_1',
+      event_type: 'im.chat.member.bot.added_v1',
+      app_id: options?.appId ?? 'app_group_1',
+    },
+    event: {
+      chat_id: options?.chatId ?? 'chat_1',
+      operator_id: {
+        open_id: options?.operatorOpenId ?? 'ou_operator',
+      },
+      name: 'Group Chat',
+    },
+  });
+
   const createService = () => {
+    const config = {
+      get: jest.fn((key: string) => {
+        if (key === 'FEISHU_APP_ID') {
+          return 'app_kanban';
+        }
+        if (key === 'FEISHU_BOT_OPEN_ID') {
+          return 'ou_bot';
+        }
+        if (key === 'FEISHU_BOT_NAME') {
+          return 'Kanban';
+        }
+        return undefined;
+      }),
+    };
     const prisma = {
       feishuEventDedup: {
         create: jest.fn().mockResolvedValue({ eventId: 'evt_1' }),
@@ -77,6 +110,8 @@ describe('FeishuEventService', () => {
         runtimeSessionKey: 'chat:chat_1:manager',
         sessionState: {},
       }),
+      getBotBinding: jest.fn().mockResolvedValue(null),
+      upsertBotBinding: jest.fn().mockResolvedValue({}),
       tryAcquireLock: jest.fn().mockResolvedValue(true),
       getBootstrapDraft: jest.fn().mockReturnValue({}),
       updateBootstrapState: jest.fn().mockResolvedValue({}),
@@ -152,6 +187,7 @@ describe('FeishuEventService', () => {
     };
 
     const service = new FeishuEventService(
+      config as any,
       prisma as any,
       agent as any,
       groupSessions as any,
@@ -168,6 +204,7 @@ describe('FeishuEventService', () => {
     );
 
     return {
+      config,
       service,
       prisma,
       agent,
@@ -250,6 +287,27 @@ describe('FeishuEventService', () => {
     );
   });
 
+  it('initializes per-chat bot binding when the bot is added to a group', async () => {
+    const { service, groupSessions, feishu } = createService();
+
+    await service.handle(createBotAddedPayload());
+
+    expect(groupSessions.upsertBotBinding).toHaveBeenCalledWith({
+      feishuChatId: 'chat_1',
+      projectId: null,
+      environmentId: null,
+      appId: 'app_group_1',
+      botOpenId: null,
+      botName: null,
+      installedByOpenId: 'ou_operator',
+    });
+    expect(feishu.sendTextMessage).toHaveBeenCalledWith(
+      'chat_id',
+      'chat_1',
+      expect.any(String),
+    );
+  });
+
   it('returns busy message when the group lock is already held', async () => {
     const { service, groupSessions, feishu } = createService();
     groupSessions.tryAcquireLock.mockResolvedValue(false);
@@ -294,7 +352,7 @@ describe('FeishuEventService', () => {
     );
     expect(groupSessions.bindProjectSession).toHaveBeenCalled();
     const [, , reply] = feishu.sendTextMessage.mock.calls[0];
-    expect(reply).toContain('初始化完成');
+    expect(reply).toContain('初始化');
   });
 
   it('stores initialized group messages but ignores non-mentioned messages', async () => {
@@ -333,7 +391,7 @@ describe('FeishuEventService', () => {
 
     await service.handle(
       createPayload('Please generate a PRD', 'group', {
-        mentions: [{ id: 'ou_bot', name: 'bot', mentioned_type: 'bot' }],
+        mentions: [{ id: 'ou_bot', name: 'Kanban', mentioned_type: 'bot' }],
       }),
     );
 
@@ -351,7 +409,7 @@ describe('FeishuEventService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           isBotMentioned: true,
-          mentionsJson: [{ id: 'ou_bot', name: 'bot', key: undefined, mentionedType: 'bot' }],
+          mentionsJson: [{ id: 'ou_bot', name: 'Kanban', key: undefined, mentionedType: 'bot' }],
         }),
       }),
     );
@@ -374,7 +432,7 @@ describe('FeishuEventService', () => {
 
     expect(groupRuntime.handleMentionMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        prompt: '@_user_1 Please generate a PRD',
+        prompt: 'Please generate a PRD',
       }),
     );
     expect(prisma.messageSource.create).toHaveBeenCalledWith(
@@ -382,6 +440,148 @@ describe('FeishuEventService', () => {
         data: expect.objectContaining({
           isBotMentioned: true,
           mentionsJson: [{ id: 'ou_bot', name: 'Kanban', key: '@_user_1', mentionedType: 'bot' }],
+        }),
+      }),
+    );
+  });
+
+  it('routes the first structured bot mention when the chat binding has not learned botOpenId yet', async () => {
+    const { service, prisma, groupRuntime } = createService();
+    prisma.project.findUnique.mockResolvedValue({
+      id: 'project_1',
+      name: 'Payments',
+      feishuChatId: 'chat_1',
+    });
+
+    await service.handle(
+      createPayload('@_user_1 Can you refine the plan?', 'group', {
+        mentions: [{ id: 'ou_runtime_bot', name: 'Runtime Bot', key: '@_user_1', mentioned_type: 'bot' }],
+      }),
+    );
+
+    expect(groupRuntime.handleMentionMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: 'Can you refine the plan?',
+      }),
+    );
+    expect(prisma.messageSource.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isBotMentioned: true,
+          mentionsJson: [{ id: 'ou_runtime_bot', name: 'Runtime Bot', key: '@_user_1', mentionedType: 'bot' }],
+        }),
+      }),
+    );
+  });
+
+  it('routes group messages by per-chat bot binding even when the display name changes', async () => {
+    const { service, prisma, groupRuntime, groupSessions } = createService();
+    prisma.project.findUnique.mockResolvedValue({
+      id: 'project_1',
+      name: 'Payments',
+      feishuChatId: 'chat_1',
+    });
+    groupSessions.getBotBinding.mockResolvedValue({
+      botOpenId: 'ou_group_bot',
+      appId: 'app_group_1',
+      botName: 'Kanban Group Bot',
+    });
+
+    await service.handle(
+      createPayload('@_user_1 Hello', 'group', {
+        mentions: [{ id: 'ou_group_bot', name: 'Project Assistant', key: '@_user_1', mentioned_type: 'bot' }],
+      }),
+    );
+
+    expect(groupRuntime.handleMentionMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: 'Hello',
+      }),
+    );
+    expect(prisma.messageSource.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isBotMentioned: true,
+          mentionsJson: [
+            { id: 'ou_group_bot', appId: undefined, name: 'Project Assistant', key: '@_user_1', mentionedType: 'bot' },
+          ],
+        }),
+      }),
+    );
+    expect(groupSessions.upsertBotBinding).toHaveBeenCalledWith({
+      feishuChatId: 'chat_1',
+      appId: 'app_kanban',
+      botOpenId: 'ou_group_bot',
+      botName: 'Project Assistant',
+    });
+  });
+
+  it('does not route another bot mention once the chat has a bound bot open id', async () => {
+    const { service, prisma, groupRuntime, groupSessions } = createService();
+    prisma.project.findUnique.mockResolvedValue({
+      id: 'project_1',
+      name: 'Payments',
+      feishuChatId: 'chat_1',
+    });
+    groupSessions.getBotBinding.mockResolvedValue({
+      botOpenId: 'ou_group_bot',
+      appId: 'app_group_1',
+      botName: 'Kanban Group Bot',
+    });
+
+    await service.handle(
+      createPayload('@_user_1 What is the weather?', 'group', {
+        mentions: [{ id: 'ou_other_bot', name: 'Other Bot', key: '@_user_1', mentioned_type: 'bot' }],
+      }),
+    );
+
+    expect(groupRuntime.handleMentionMessage).not.toHaveBeenCalled();
+    expect(prisma.messageSource.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isBotMentioned: false,
+          mentionsJson: [
+            { id: 'ou_other_bot', appId: undefined, name: 'Other Bot', key: '@_user_1', mentionedType: 'bot' },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it('does not treat plain text without structured mentions as a bot mention', async () => {
+    const { service, prisma, groupRuntime } = createService();
+    prisma.project.findUnique.mockResolvedValue({
+      id: 'project_1',
+      name: 'Payments',
+      feishuChatId: 'chat_1',
+    });
+
+    await service.handle({
+      header: { event_id: 'evt_1', app_id: 'app_kanban' },
+      event: {
+        message: {
+          chat_id: 'chat_1',
+          message_id: 'msg_1',
+          chat_type: 'group',
+          content: JSON.stringify({
+            text: '@Kanban Hello',
+            mentions: [],
+          }),
+        },
+        sender: {
+          sender_id: {
+            open_id: 'ou_sender',
+          },
+        },
+      },
+    });
+
+    expect(groupRuntime.handleMentionMessage).not.toHaveBeenCalled();
+    expect(prisma.messageSource.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isBotMentioned: false,
+          mentionsJson: [],
         }),
       }),
     );

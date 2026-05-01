@@ -22,6 +22,14 @@ import { SummaryPolicy } from './agent.types';
 
 type SessionState = {
   bootstrapDraft?: Record<string, string | undefined>;
+  botBinding?: {
+    appId?: string;
+    botOpenId?: string;
+    botName?: string;
+    installedAt?: string;
+    installedByOpenId?: string;
+    updatedAt?: string;
+  };
 };
 
 @Injectable()
@@ -208,8 +216,16 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
       error?: string | null;
     },
   ) {
+    const current = await this.prisma.groupAgentSession.findUnique({
+      where: { id: sessionId },
+      select: { sessionState: true },
+    });
+    const currentState = this.readSessionState(current?.sessionState);
     const data: Record<string, unknown> = {
-      sessionState: { bootstrapDraft: input.draft },
+      sessionState: {
+        ...currentState,
+        bootstrapDraft: input.draft,
+      },
       lastMessageAt: new Date(),
     };
     if (input.summary !== undefined) {
@@ -222,6 +238,60 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
     return this.prisma.groupAgentSession.update({
       where: { id: sessionId },
       data,
+    });
+  }
+
+  async getBotBinding(feishuChatId: string) {
+    const session = await this.prisma.groupAgentSession.findUnique({
+      where: {
+        feishuChatId_agentRole: {
+          feishuChatId,
+          agentRole: AgentRole.manager,
+        },
+      },
+      select: {
+        sessionState: true,
+      },
+    });
+    return this.readSessionState(session?.sessionState).botBinding ?? null;
+  }
+
+  async upsertBotBinding(input: {
+    feishuChatId: string;
+    projectId?: string | null;
+    environmentId?: string | null;
+    appId?: string | null;
+    botOpenId?: string | null;
+    botName?: string | null;
+    installedByOpenId?: string | null;
+  }) {
+    const session = await this.getOrCreateSession(input.feishuChatId, {
+      projectId: input.projectId ?? null,
+      environmentId: input.environmentId ?? null,
+      feishuChatId: input.feishuChatId,
+      agentRole: AgentRole.manager,
+      sessionMode: input.projectId ? GroupSessionMode.active : GroupSessionMode.bootstrap,
+    });
+    const currentState = this.readSessionState(session.sessionState);
+    const currentBinding = currentState.botBinding ?? {};
+    const nextBinding = {
+      ...currentBinding,
+      ...(input.appId?.trim() ? { appId: input.appId.trim() } : {}),
+      ...(input.botOpenId?.trim() ? { botOpenId: input.botOpenId.trim() } : {}),
+      ...(input.botName?.trim() ? { botName: input.botName.trim() } : {}),
+      ...(input.installedByOpenId?.trim() ? { installedByOpenId: input.installedByOpenId.trim() } : {}),
+      installedAt: currentBinding.installedAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    return this.prisma.groupAgentSession.update({
+      where: { id: session.id },
+      data: {
+        sessionState: {
+          ...currentState,
+          botBinding: nextBinding,
+        },
+      },
     });
   }
 
@@ -288,8 +358,7 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
   }
 
   getBootstrapDraft(session: GroupAgentSession) {
-    const state = (session.sessionState ?? {}) as SessionState;
-    return state.bootstrapDraft ?? {};
+    return this.readSessionState(session.sessionState).bootstrapDraft ?? {};
   }
 
   getSummaryPolicy(session: Pick<GroupAgentSession, 'summaryPolicyJson'>): SummaryPolicy {
@@ -485,5 +554,9 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
 
   private toSummaryPolicyJson(value: SummaryPolicy): Prisma.InputJsonValue {
     return value as unknown as Prisma.InputJsonValue;
+  }
+
+  private readSessionState(value: unknown): SessionState {
+    return value && typeof value === 'object' && !Array.isArray(value) ? (value as SessionState) : {};
   }
 }

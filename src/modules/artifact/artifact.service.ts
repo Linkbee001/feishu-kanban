@@ -3,7 +3,7 @@ import { ArtifactStatus, ArtifactType } from '@prisma/client';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { assertArtifactTransition } from '../../common/state/state-machine';
-import { AgentOutput, AgentTaskOutput } from '../agent/agent.types';
+import { AgentOutput, AgentTaskOutput, DigestTargetChannel } from '../agent/agent.types';
 import { FeishuService } from '../feishu/feishu.service';
 
 @Injectable()
@@ -61,7 +61,15 @@ export class ArtifactService {
   async syncArtifact(id: string) {
     const artifact = await this.prisma.artifact.findUnique({
       where: { id },
-      include: { project: true, environment: true, agentRun: true },
+      include: {
+        project: true,
+        environment: true,
+        agentRun: {
+          include: {
+            messageSource: true,
+          },
+        },
+      },
     });
     if (!artifact) throw new NotFoundException('Artifact not found');
     if (artifact.status === ArtifactStatus.synced || artifact.status === ArtifactStatus.skipped) {
@@ -74,7 +82,16 @@ export class ArtifactService {
       if (artifact.type === ArtifactType.summary || artifact.type === ArtifactType.execution_log) {
         return this.markSynced(id, {});
       }
+      if (!this.isPersistRequested(output)) {
+        return this.markSkipped(id, 'Durable persistence was not requested for this output.');
+      }
       if (artifact.type === ArtifactType.document) {
+        if (!this.hasTargetChannel(output, 'feishu_doc')) {
+          return this.markSkipped(id, 'Document output did not target feishu_doc.');
+        }
+        if (!(await this.canWriteTarget(artifact.projectId, artifact.agentRun?.messageSource?.feishuChatId, 'document'))) {
+          return this.markSkipped(id, 'Group policy does not allow document writes.');
+        }
         const doc = await this.feishu.createDocument(
           output.title,
           artifact.project.docFolderToken ?? undefined,
@@ -85,6 +102,12 @@ export class ArtifactService {
         return this.markSynced(id, partialSync);
       }
       if (artifact.type === ArtifactType.task) {
+        if (!this.hasTargetChannel(output, 'bitable')) {
+          return this.markSkipped(id, 'Task output did not target bitable.');
+        }
+        if (!(await this.canWriteTarget(artifact.projectId, artifact.agentRun?.messageSource?.feishuChatId, 'task'))) {
+          return this.markSkipped(id, 'Group policy does not allow task board writes.');
+        }
         const tasks = output.tasks?.length ? output.tasks : [{ title: output.title, description: output.content }];
         const records: string[] = [];
 
@@ -101,12 +124,15 @@ export class ArtifactService {
         return this.markSynced(id, { bitableRecordId: records.filter(Boolean).join(',') });
       }
       if (artifact.type === ArtifactType.file) {
+        if (!this.isPersistRequested(output)) {
+          return this.markSkipped(id, 'File output was not marked as durable.');
+        }
         const fileName = output.filePath?.split(/[\\/]/).pop() ?? output.title;
         const bytes = Buffer.from(output.content ?? '', 'utf8');
         const uploaded = await this.feishu.uploadFile(fileName, bytes, output.mimeType);
         return this.markSynced(id, { fileKey: uploaded?.data?.file_key });
       }
-      return this.markSkipped(id);
+      return this.markSkipped(id, 'Artifact type is not configured for formal sync.');
     } catch (error) {
       assertArtifactTransition(artifact.status, ArtifactStatus.failed);
       return this.prisma.artifact.update({
@@ -138,6 +164,7 @@ export class ArtifactService {
         : undefined;
     if (metadata) {
       delete metadata.syncError;
+      delete metadata.syncSkipReason;
     }
     return this.prisma.artifact.update({
       where: { id },
@@ -149,18 +176,61 @@ export class ArtifactService {
     });
   }
 
-  private async markSkipped(id: string) {
+  private async markSkipped(id: string, reason?: string) {
     const artifact = await this.find(id);
     assertArtifactTransition(artifact.status, ArtifactStatus.skipped);
+    const metadata =
+      artifact.metadata && typeof artifact.metadata === 'object' && !Array.isArray(artifact.metadata)
+        ? { ...(artifact.metadata as Record<string, unknown>) }
+        : {};
+    delete metadata.syncError;
+    if (reason) {
+      metadata.syncSkipReason = reason;
+    }
     return this.prisma.artifact.update({
       where: { id },
-      data: { status: ArtifactStatus.skipped },
+      data: {
+        status: ArtifactStatus.skipped,
+        metadata: metadata as any,
+      },
     });
   }
 
   private toArtifactType(type: AgentOutput['type']): ArtifactType {
     if (type === 'log') return ArtifactType.execution_log;
     return type as ArtifactType;
+  }
+
+  private isPersistRequested(output: AgentOutput) {
+    return output.metadata?.persist === true;
+  }
+
+  private hasTargetChannel(output: AgentOutput, channel: DigestTargetChannel) {
+    const channels = output.metadata?.targetChannels;
+    return Array.isArray(channels) && channels.includes(channel);
+  }
+
+  private async canWriteTarget(projectId: string, feishuChatId: string | null | undefined, type: 'document' | 'task') {
+    const chatId = feishuChatId?.trim();
+    if (!chatId) {
+      return true;
+    }
+    const policy = await this.prisma.groupPolicy.findFirst({
+      where: {
+        projectId,
+        feishuChatId: chatId,
+        archivedAt: null,
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        allowDocWrite: true,
+        allowTaskBoardWrite: true,
+      },
+    });
+    if (!policy) {
+      return true;
+    }
+    return type === 'document' ? policy.allowDocWrite : policy.allowTaskBoardWrite;
   }
 
   private taskFields(task: AgentTaskOutput, environmentName?: string, agentRunId?: string | null) {

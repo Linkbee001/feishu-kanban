@@ -279,6 +279,7 @@ export class PiMonoAdapter {
     sessionStoreRef?: string | null;
     sessionMode?: 'bootstrap' | 'active' | 'disabled';
     projectContextBundle?: PiMonoCreateRunRequest['projectContextBundle'];
+    minimalContext?: RuntimeMinimalContext;
     runtimeTasks?: GroupRuntimeTaskSnapshot[];
     roleProfile?: CompiledRoleProfile;
     project: PiMonoCreateRunRequest['project'];
@@ -298,6 +299,7 @@ export class PiMonoAdapter {
         requestKind: 'group_runtime',
         wakeMode: 'interactive',
         projectContextBundle: input.projectContextBundle,
+        minimalContext: input.minimalContext,
         runtimeTasks: input.runtimeTasks ?? [],
         roleProfile: input.roleProfile,
         project: input.project,
@@ -457,7 +459,9 @@ export class PiMonoAdapter {
       state.currentRoleProfile = input.roleProfile;
       state.waitingReason = undefined;
       state.waitingTaskId =
-        typeof input.event.payload.taskId === 'string' ? input.event.payload.taskId : state.waitingTaskId;
+        typeof input.event.payload.taskId === 'string'
+          ? this.resolveRuntimeTaskId(state, input.event.payload.taskId) ?? state.waitingTaskId
+          : state.waitingTaskId;
       if (state.waitingTaskId) {
         this.transitionRuntimeTask(state, {
           type: 'todo_write',
@@ -777,7 +781,7 @@ export class PiMonoAdapter {
 
       return {
         status: 'succeeded',
-        actions: execution.actions ?? [],
+        actions: this.ensureGroupRuntimeReplyAction(execution.actions ?? [], execution.outputs, lastAssistantText),
         outputs: execution.outputs,
         outputSummary: execution.outputs.length ? this.buildOutputSummary(execution.outputs) : undefined,
         session: this.buildSessionSnapshot(state, execution.outputs, lastAssistantText),
@@ -972,6 +976,8 @@ export class PiMonoAdapter {
       promptGuidelines: [
         'Call emit_outputs exactly once when you have the final structured result.',
         'Use a summary output when no document, task, file, or log artifact is appropriate.',
+        'If you emit a document for formal project knowledge, include metadata.persist=true and targetChannels=["feishu_doc"].',
+        'If you emit tasks for the formal task board, include metadata.persist=true and targetChannels=["bitable"].',
       ],
       parameters: {
         type: 'object',
@@ -1010,7 +1016,7 @@ export class PiMonoAdapter {
           };
         }
 
-        const outputs = this.normalizeOutputs(params.outputs);
+        const outputs = this.normalizeOutputs(params.outputs, activeExecution.mode);
         if (!outputs.length) {
           throw new Error('emit_outputs requires at least one valid AgentOutput');
         }
@@ -1110,7 +1116,10 @@ export class PiMonoAdapter {
         additionalProperties: false,
       } as any,
       execute: async (_toolCallId: string, params: ReadProjectDocArgs) => {
-        const doc = await this.feishuReader.readProjectDocument(params.token, params.title);
+        const project = await this.getProjectRuntimeResource(_state);
+        const doc = await this.feishuReader.readProjectDocument(params.token, params.title, {
+          folderToken: project.docFolderToken,
+        });
         return {
           content: [{ type: 'text', text: JSON.stringify(doc) }],
         };
@@ -1399,12 +1408,64 @@ export class PiMonoAdapter {
     return value;
   }
 
-  private normalizeOutputs(value: unknown): AgentOutput[] {
+  private normalizeOutputs(
+    value: unknown,
+    mode?: ActiveExecutionState['mode'],
+  ): AgentOutput[] {
     if (!Array.isArray(value)) {
       return [];
     }
 
-    return value.filter((item) => this.isAgentOutput(item));
+    return value
+      .filter((item) => this.isAgentOutput(item))
+      .map((item) => this.applyOutputDeliveryDefaults(item, mode));
+  }
+
+  private applyOutputDeliveryDefaults(
+    output: AgentOutput,
+    mode?: ActiveExecutionState['mode'],
+  ): AgentOutput {
+    if (mode !== 'group_runtime') {
+      return output;
+    }
+
+    if (!['document', 'task'].includes(output.type)) {
+      return output;
+    }
+
+    const metadata =
+      output.metadata && typeof output.metadata === 'object' && !Array.isArray(output.metadata)
+        ? { ...output.metadata }
+        : {};
+    const channels = Array.isArray(metadata.targetChannels)
+      ? metadata.targetChannels.map((channel) => String(channel))
+      : [];
+
+    if (metadata.persist === false) {
+      return {
+        ...output,
+        metadata,
+      };
+    }
+
+    if (output.type === 'document') {
+      metadata.persist ??= true;
+      if (!channels.length) {
+        metadata.targetChannels = ['feishu_doc'];
+      }
+    }
+
+    if (output.type === 'task') {
+      metadata.persist ??= true;
+      if (!channels.length) {
+        metadata.targetChannels = ['bitable'];
+      }
+    }
+
+    return {
+      ...output,
+      metadata,
+    };
   }
 
   private isAgentOutput(value: unknown): value is AgentOutput {
@@ -1557,10 +1618,15 @@ export class PiMonoAdapter {
         ]
       : groupRuntimeMode
         ? [
-            'You are running as PiMono for the Feishu project collaboration backend.',
+            'You are the long-running manager for a Feishu project group.',
             'This turn is a group runtime turn, not a formal execution run.',
+            'You are a group project administrator, not a generic chat assistant and not a backend workflow engine.',
+            'Every completed group runtime turn must end with a user-facing group reply.',
+            'Treat the latest group message as a trigger signal, not as the only source of project context.',
             'Prefer concise group replies, runtime todo updates, and lightweight progress over large formal deliverables.',
-            'Only call emit_outputs if a persisted formal artifact is genuinely needed for the user request.',
+            'Feishu docs are the formal knowledge base, and the bound Feishu task board is the formal follow-up board.',
+            'Runtime todos are internal scratchpad state and are not the source of truth for official project tasks.',
+            'Only call emit_outputs if a durable formal artifact is explicitly needed in this turn.',
             'Do not generate a large formal document by default during group runtime turns.',
           ]
       : [
@@ -1577,10 +1643,12 @@ export class PiMonoAdapter {
           'First decide whether the latest message creates new internal todos or updates existing ones.',
           'Maintain the persisted todo queue with todo_list and todo_write.',
           'At most one todo may be in running state at any time.',
+          'You must call reply_group at least once in every completed turn, even if it is only a short acknowledgment or summary.',
           'If human confirmation is required, use request_group_confirmation and stop the blocked todo in waiting_confirmation.',
           'Use reply_group for concise user-facing updates.',
-          'Internal todos are not the official Feishu task board unless you explicitly emit a formal task output.',
-          'When you are ready to persist formal deliverables, call emit_outputs exactly once.',
+          'Read bound project resources on demand before relying on chat memory alone.',
+          'Internal todos are not the official Feishu task board unless you explicitly emit a formal task output with persistence intent.',
+          'When you are ready to persist formal deliverables, call emit_outputs exactly once and only for explicitly durable outputs.',
         ]
       : [];
 
@@ -1617,6 +1685,21 @@ export class PiMonoAdapter {
       payload.minimalContext?.sessionMemorySummary
         ? `Session memory summary: ${payload.minimalContext.sessionMemorySummary}`
         : 'Session memory summary: none',
+      groupRuntimeMode
+        ? `Group policy: mentionOnly=${payload.minimalContext?.groupPolicy?.mentionOnly ?? 'unknown'}, allowDocWrite=${payload.minimalContext?.groupPolicy?.allowDocWrite ?? 'unknown'}, allowTaskBoardWrite=${payload.minimalContext?.groupPolicy?.allowTaskBoardWrite ?? 'unknown'}, highRiskConfirmation=${payload.minimalContext?.groupPolicy?.highRiskActionsRequireConfirmation ?? 'unknown'}`
+        : undefined,
+      groupRuntimeMode
+        ? `Project resources: docFolder=${payload.minimalContext?.resourceSummary?.hasDocFolder ? 'bound' : 'unbound'}, taskBoard=${payload.minimalContext?.resourceSummary?.hasTaskBoard ? 'bound' : 'unbound'}`
+        : undefined,
+      groupRuntimeMode
+        ? `Recent project docs: ${this.describeRecentDocs(payload)}`
+        : undefined,
+      groupRuntimeMode
+        ? `Task board summary: ${this.describeTaskBoardSummary(payload)}`
+        : undefined,
+      groupRuntimeMode
+        ? `Recent formal artifacts: ${this.describeRecentArtifacts(payload)}`
+        : undefined,
       payload.environment.repoSyncError ? `Latest repo sync error: ${payload.environment.repoSyncError}` : 'Latest repo sync error: none',
       payload.roleProfile ? 'A compiled role profile context file is attached below.' : 'No role profile is attached.',
       `Target output schema: ${JSON.stringify(payload.outputSchema)}`,
@@ -1648,6 +1731,7 @@ export class PiMonoAdapter {
         ...base,
         '- Prefer advancing the runtime queue and current todo state in this turn.',
         '- For longer work, send concise user-facing progress only when it materially helps; otherwise keep progress in runtime events and todo state.',
+        '- A successful runtime turn must include a group-facing reply.',
         '- Final runtime completion should be backed by tool effects, runtime state changes, or emitted outputs.',
       ];
     }
@@ -1669,7 +1753,7 @@ export class PiMonoAdapter {
       payload.environment.repoMirrorPath && payload.environment.repoSyncStatus === 'ready'
         ? '- Repo inspection is available through the ready local repo mirror; use it as the source of truth for code facts.'
         : '- Repo inspection is not currently available from a ready local mirror; do not assume repository contents.',
-      '- Feishu project materials are not mirrored into prompt context; retrieve them only when needed.',
+      '- Feishu project materials are only summarized lightly in prompt context; retrieve them on demand when you need real details.',
     ];
   }
 
@@ -1687,7 +1771,15 @@ export class PiMonoAdapter {
     if (requestKind === 'group_runtime') {
       lines.push('- Human confirmation must go through request_group_confirmation and then stop the blocked task in waiting_confirmation.');
       lines.push('- Keep at most one runtime todo in running state at a time.');
-      lines.push('- reply_group should stay concise and only contain user-facing progress or conclusions.');
+      lines.push('- reply_group is mandatory for every completed turn and should stay concise and user-facing.');
+      lines.push(
+        `- Respect group policy boundaries: doc writes are ${
+          payload.minimalContext?.groupPolicy?.allowDocWrite === false ? 'disabled' : 'allowed when explicitly requested'
+        }, task board writes are ${
+          payload.minimalContext?.groupPolicy?.allowTaskBoardWrite === false ? 'disabled' : 'allowed when explicitly requested'
+        }.`,
+      );
+      lines.push('- Only durable outputs with explicit persistence intent should be considered for formal sync.');
     }
 
     if (requestKind === 'interactive_decision') {
@@ -1714,6 +1806,32 @@ export class PiMonoAdapter {
     return 'repo_initializing';
   }
 
+  private describeRecentDocs(payload: PiMonoCreateRunRequest) {
+    const docs = payload.minimalContext?.resourceSummary?.recentDocs ?? [];
+    if (!docs.length) {
+      return 'none';
+    }
+    return docs
+      .map((doc) => `${doc.title}${doc.updatedAt ? ` (${doc.updatedAt})` : ''}`)
+      .join('; ');
+  }
+
+  private describeTaskBoardSummary(payload: PiMonoCreateRunRequest) {
+    const summary = payload.minimalContext?.resourceSummary?.taskBoardSummary;
+    if (!summary) {
+      return 'none';
+    }
+    return `pending_confirmation=${summary.pendingConfirmation}, blocked=${summary.blocked}, in_progress=${summary.inProgress}`;
+  }
+
+  private describeRecentArtifacts(payload: PiMonoCreateRunRequest) {
+    const artifacts = payload.minimalContext?.resourceSummary?.recentArtifacts ?? [];
+    if (!artifacts.length) {
+      return 'none';
+    }
+    return artifacts.map((artifact) => `${artifact.type}:${artifact.title}`).join('; ');
+  }
+
   private buildFallbackOutputs(text?: string | null): AgentOutput[] {
     return [
       {
@@ -1724,6 +1842,41 @@ export class PiMonoAdapter {
         metadata: { fallback: true },
       },
     ];
+  }
+
+  private ensureGroupRuntimeReplyAction(
+    actions: GroupRuntimeAction[],
+    outputs?: AgentOutput[],
+    lastAssistantText?: string,
+  ): GroupRuntimeAction[] {
+    if (actions.some((action) => action.type === 'reply_group' && action.text.trim())) {
+      return actions;
+    }
+    return [
+      ...actions,
+      {
+        type: 'reply_group',
+        text: this.buildMandatoryRuntimeReply(outputs, lastAssistantText),
+      },
+    ];
+  }
+
+  private buildMandatoryRuntimeReply(outputs?: AgentOutput[], lastAssistantText?: string) {
+    const assistantText = lastAssistantText?.trim();
+    if (assistantText) {
+      return assistantText.slice(0, 1000);
+    }
+    if (outputs?.length) {
+      const titles = outputs
+        .map((output) => output.title?.trim())
+        .filter((title): title is string => !!title)
+        .slice(0, 3);
+      if (titles.length) {
+        return `已处理完成。本轮结果：${titles.join('、')}。`;
+      }
+      return '已处理完成，我已经整理好了本轮结果。';
+    }
+    return '收到，这条消息我已经处理完了。';
   }
 
   private buildOutputSummary(outputs: AgentOutput[]): string {
@@ -1800,6 +1953,11 @@ export class PiMonoAdapter {
       });
       state.runtimeTaskSnapshots = tasks.map((task) => ({
         id: task.id,
+        runtimeRef: this.extractRuntimeTaskRef(
+          task.taskPayloadJson && typeof task.taskPayloadJson === 'object' && !Array.isArray(task.taskPayloadJson)
+            ? (task.taskPayloadJson as Record<string, unknown>)
+            : null,
+        ),
         title: task.title,
         description: task.description,
         intent: task.intent,
@@ -2175,9 +2333,11 @@ export class PiMonoAdapter {
       }
 
       if (action.type === 'request_group_confirmation') {
+        let persistedTaskId: string | null = null;
         if (action.taskId) {
           const snapshot = this.findRuntimeTaskSnapshot(state, action.taskId);
           if (snapshot) {
+            persistedTaskId = snapshot.id;
             snapshot.status = 'waiting_confirmation';
             snapshot.blockedReason = action.summary;
             snapshot.resultSummary = 'Waiting for confirmation';
@@ -2195,6 +2355,9 @@ export class PiMonoAdapter {
               contextBinding,
             );
           }
+          if (!persistedTaskId && this.isUuid(action.taskId)) {
+            persistedTaskId = action.taskId;
+          }
         } else {
           state.waitingReason = action.summary;
         }
@@ -2203,7 +2366,7 @@ export class PiMonoAdapter {
           state,
           'confirmation_requested',
           {
-            taskId: action.taskId ?? null,
+            taskId: persistedTaskId,
             actionType: action.actionType,
             summary: action.summary,
             detail: action.detail ?? null,
@@ -2217,7 +2380,7 @@ export class PiMonoAdapter {
           state,
           'session_waiting',
           {
-            taskId: action.taskId ?? null,
+            taskId: persistedTaskId,
             reason: action.summary,
             feishuChatId: contextBinding?.feishuChatId ?? null,
           },
@@ -2243,8 +2406,12 @@ export class PiMonoAdapter {
 
   private transitionRuntimeTask(state: SessionRuntimeState, action: GroupRuntimeTodoWriteAction) {
     if (action.action === 'create') {
+      const requestedTaskId = typeof action.taskId === 'string' && action.taskId.trim() ? action.taskId.trim() : null;
+      const internalTaskId = requestedTaskId && this.isUuid(requestedTaskId) ? requestedTaskId : randomUUID();
+      const runtimeRef = requestedTaskId && !this.isUuid(requestedTaskId) ? requestedTaskId : null;
       const snapshot: GroupRuntimeTaskSnapshot = {
-        id: action.taskId ?? randomUUID(),
+        id: internalTaskId,
+        runtimeRef,
         title: action.title ?? 'Untitled runtime task',
         description: action.description ?? null,
         intent: action.intent ?? 'requirement_analysis',
@@ -2252,7 +2419,7 @@ export class PiMonoAdapter {
         outputMode: action.outputMode ?? null,
         orderIndex: (state.runtimeTaskSnapshots[state.runtimeTaskSnapshots.length - 1]?.orderIndex ?? -1) + 1,
         status: 'queued',
-        taskPayloadJson: action.taskPayload ?? null,
+        taskPayloadJson: this.withRuntimeTaskRef(action.taskPayload, runtimeRef),
         resultSummary: action.resultSummary ?? null,
         lastError: action.errorMessage ?? null,
       };
@@ -2270,7 +2437,9 @@ export class PiMonoAdapter {
     if (action.intent !== undefined) snapshot.intent = action.intent;
     if (action.skillHint !== undefined) snapshot.skillHint = action.skillHint ?? null;
     if (action.outputMode !== undefined) snapshot.outputMode = action.outputMode ?? null;
-    if (action.taskPayload !== undefined) snapshot.taskPayloadJson = action.taskPayload;
+    if (action.taskPayload !== undefined) {
+      snapshot.taskPayloadJson = this.withRuntimeTaskRef(action.taskPayload, snapshot.runtimeRef ?? null);
+    }
     if (action.resultSummary !== undefined) snapshot.resultSummary = action.resultSummary;
     if (action.errorMessage !== undefined) snapshot.lastError = action.errorMessage;
 
@@ -2301,7 +2470,12 @@ export class PiMonoAdapter {
   }
 
   private findRuntimeTaskSnapshot(state: SessionRuntimeState, taskId: string) {
-    return state.runtimeTaskSnapshots.find((task) => task.id === taskId) ?? null;
+    const normalizedTaskId = taskId.trim();
+    return (
+      state.runtimeTaskSnapshots.find(
+        (task) => task.id === normalizedTaskId || (task.runtimeRef != null && task.runtimeRef === normalizedTaskId),
+      ) ?? null
+    );
   }
 
   private findActiveRuntimeTaskId(state: SessionRuntimeState) {
@@ -2311,6 +2485,41 @@ export class PiMonoAdapter {
       state.runtimeTaskSnapshots[state.runtimeTaskSnapshots.length - 1]?.id ??
       null
     );
+  }
+
+  private resolveRuntimeTaskId(state: SessionRuntimeState, taskId: string) {
+    return this.findRuntimeTaskSnapshot(state, taskId)?.id ?? (this.isUuid(taskId) ? taskId : null);
+  }
+
+  private withRuntimeTaskRef(
+    payload: Record<string, unknown> | null | undefined,
+    runtimeRef: string | null,
+  ): Record<string, unknown> | null {
+    const base =
+      payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? { ...payload }
+        : payload === null
+          ? null
+          : {};
+    if (!base) {
+      return runtimeRef ? { __runtimeRef: runtimeRef } : null;
+    }
+    if (runtimeRef) {
+      base.__runtimeRef = runtimeRef;
+    } else {
+      delete base.__runtimeRef;
+    }
+    return base;
+  }
+
+  private extractRuntimeTaskRef(payload: Record<string, unknown> | null) {
+    return typeof payload?.__runtimeRef === 'string' && payload.__runtimeRef.trim()
+      ? payload.__runtimeRef.trim()
+      : null;
+  }
+
+  private isUuid(value: string) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
   }
 
   private async recordRuntimeEvent(
@@ -2393,7 +2602,7 @@ export class PiMonoAdapter {
           nextActionHint: task.nextActionHint ?? null,
           priority: task.priority ?? 0,
           triggerType: task.triggerType ?? null,
-          taskPayloadJson: (task.taskPayloadJson ?? {}) as any,
+          taskPayloadJson: (this.withRuntimeTaskRef(task.taskPayloadJson, task.runtimeRef ?? null) ?? {}) as any,
           resultSummary: task.resultSummary ?? null,
           lastError: task.lastError ?? null,
         },
@@ -2411,7 +2620,7 @@ export class PiMonoAdapter {
           nextActionHint: task.nextActionHint ?? null,
           priority: task.priority ?? 0,
           triggerType: task.triggerType ?? null,
-          taskPayloadJson: (task.taskPayloadJson ?? {}) as any,
+          taskPayloadJson: (this.withRuntimeTaskRef(task.taskPayloadJson, task.runtimeRef ?? null) ?? {}) as any,
           resultSummary: task.resultSummary ?? null,
           lastError: task.lastError ?? null,
         },

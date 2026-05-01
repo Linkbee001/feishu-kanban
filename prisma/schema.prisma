@@ -143,7 +143,6 @@ model Project {
   confirmations        ConfirmationRequest[]
   groupAgentSessions   GroupAgentSession[]
   runtimeTasks         GroupRuntimeTask[]
-  agentProfileOverrides ProjectAgentProfileOverride[]
   groupPolicies        GroupPolicy[]
   memberProfiles       ProjectMemberProfile[]
   runtimeEvents        RuntimeEvent[]
@@ -469,34 +468,4 @@ model ProjectMemberProfile {
   @@unique([projectId, feishuChatId, openId])
   @@index([feishuChatId])
   @@map("project_member_profiles")
-}
-
-model AgentRoleProfile {
-  agentRole         AgentRole @id @map("agent_role")
-  agentsMd          String    @default("") @map("agents_md")
-  soulMd            String    @default("") @map("soul_md")
-  userMdTemplate    String    @default("") @map("user_md_template")
-  standingOrdersMd  String    @default("") @map("standing_orders_md")
-  skillsJson        Json      @default("[]") @map("skills_json")
-  promptPreludeMd   String    @default("") @map("prompt_prelude_md")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
-  projectOverrides  ProjectAgentProfileOverride[]
-
-  @@map("agent_role_profiles")
-}
-
-model ProjectAgentProfileOverride {
-  id         String    @id @default(uuid()) @db.Uuid
-  projectId   String   @map("project_id") @db.Uuid
-  agentRole   AgentRole @map("agent_role")
-  overrideJson Json    @default("{}") @map("override_json")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  profile     AgentRoleProfile @relation(fields: [agentRole], references: [agentRole], onDelete: Cascade)
-
-  @@unique([projectId, agentRole])
-  @@index([agentRole])
-  @@map("project_agent_profile_overrides")
 }

@@ -395,6 +395,28 @@ describe('PiMonoAdapter', () => {
         projectPath: process.cwd(),
         repoSyncStatus: 'ready',
       },
+      minimalContext: {
+        sessionMemorySummary: 'manager memory',
+        repoReady: true,
+        repoHeadRef: 'abc123',
+        groupPolicy: {
+          mentionOnly: true,
+          allowDocWrite: true,
+          allowTaskBoardWrite: false,
+          highRiskActionsRequireConfirmation: true,
+        },
+        resourceSummary: {
+          hasDocFolder: true,
+          hasTaskBoard: true,
+          recentDocs: [{ title: 'PRD', updatedAt: '2026-04-30T00:00:00.000Z' }],
+          taskBoardSummary: {
+            pendingConfirmation: 1,
+            blocked: 2,
+            inProgress: 3,
+          },
+          recentArtifacts: [{ title: 'Kickoff Notes', type: 'document', createdAt: '2026-04-29T00:00:00.000Z' }],
+        },
+      },
       source: {
         messageSourceId: 'source_1',
         senderOpenId: 'ou_sender',
@@ -454,6 +476,13 @@ describe('PiMonoAdapter', () => {
     expect(runtimePrompt).toContain('## Runtime Policy');
     expect(runtimePrompt).toContain('Repo capability state: repo_unconfigured');
     expect(runtimePrompt).toContain('Runtime task snapshot count: 0');
+    expect(runtimePrompt).toContain('You are the long-running manager for a Feishu project group.');
+    expect(runtimePrompt).toContain('Feishu docs are the formal knowledge base');
+    expect(runtimePrompt).toContain('Group policy: mentionOnly=true, allowDocWrite=true, allowTaskBoardWrite=false, highRiskConfirmation=true');
+    expect(runtimePrompt).toContain('Project resources: docFolder=bound, taskBoard=bound');
+    expect(runtimePrompt).toContain('Recent project docs: PRD (2026-04-30T00:00:00.000Z)');
+    expect(runtimePrompt).toContain('Task board summary: pending_confirmation=1, blocked=2, in_progress=3');
+    expect(runtimePrompt).toContain('Recent formal artifacts: document:Kickoff Notes');
   });
 
   it('uses a longer default timeout for group runtime turns and allows configuration overrides', () => {
@@ -476,6 +505,68 @@ describe('PiMonoAdapter', () => {
 
     expect((adapterDefault as any).resolveGroupRuntimeTimeoutMs()).toBe(120_000);
     expect((adapterOverride as any).resolveGroupRuntimeTimeoutMs()).toBe(180_000);
+  });
+
+  it('maps model task refs to internal UUID task ids for persistence', () => {
+    const adapter = new PiMonoAdapter(
+      createConfig() as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      createRedis() as any,
+      createArtifactQueue() as any,
+    );
+
+    const state = {
+      runtimeTaskSnapshots: [],
+      waitingTaskId: undefined,
+    } as any;
+
+    const created = (adapter as any).transitionRuntimeTask(state, {
+      type: 'todo_write',
+      action: 'create',
+      taskId: 'task_1',
+      title: 'Aliased task',
+    });
+
+    expect(created.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(created.runtimeRef).toBe('task_1');
+    expect((adapter as any).findRuntimeTaskSnapshot(state, 'task_1')).toBe(created);
+    expect((adapter as any).resolveRuntimeTaskId(state, 'task_1')).toBe(created.id);
+  });
+
+  it('defaults group runtime document outputs to durable feishu_doc delivery when metadata is omitted', () => {
+    const adapter = new PiMonoAdapter(
+      createConfig() as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      createRedis() as any,
+      createArtifactQueue() as any,
+    );
+
+    const outputs = (adapter as any).normalizeOutputs(
+      [
+        {
+          type: 'document',
+          title: '系统功能说明文档',
+          content: '# 内容',
+        },
+      ],
+      'group_runtime',
+    );
+
+    expect(outputs).toEqual([
+      expect.objectContaining({
+        type: 'document',
+        metadata: expect.objectContaining({
+          persist: true,
+          targetChannels: ['feishu_doc'],
+        }),
+      }),
+    ]);
   });
 
   it('salvages captured runtime actions and outputs when a group runtime turn times out', async () => {
@@ -570,6 +661,26 @@ describe('PiMonoAdapter', () => {
         messageSourceId: 'source_1',
       }),
     );
+  });
+
+  it('synthesizes a mandatory reply_group action when a runtime turn succeeds without one', async () => {
+    const adapter = new PiMonoAdapter(
+      createConfig() as any,
+      createPrisma() as any,
+      createFeishu() as any,
+      createFeishuReader() as any,
+      createRedis() as any,
+      createArtifactQueue() as any,
+    );
+
+    const result = (adapter as any).ensureGroupRuntimeReplyAction([], [], 'Final assistant summary');
+
+    expect(result).toEqual([
+      {
+        type: 'reply_group',
+        text: 'Final assistant summary',
+      },
+    ]);
   });
 
   it('starts a runtime turn and records runtime events for idle submitMessage', async () => {

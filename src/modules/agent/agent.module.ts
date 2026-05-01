@@ -16,7 +16,6 @@ import { GroupRuntimeService } from './group-runtime.service';
 import { GroupRuntimeTaskService } from './group-runtime-task.service';
 import { RoleProfileService } from './role-profile.service';
 import { GroupRuntimeController } from './group-runtime.controller';
-import { AgentProfileController } from './agent-profile.controller';
 
 @Module({
   imports: [
@@ -25,7 +24,7 @@ import { AgentProfileController } from './agent-profile.controller';
     forwardRef(() => FeishuModule),
     forwardRef(() => ConfirmationModule),
   ],
-  controllers: [AgentController, GroupRuntimeController, AgentProfileController],
+  controllers: [AgentController, GroupRuntimeController],
   providers: [
     AgentService,
     PiMonoAdapter,

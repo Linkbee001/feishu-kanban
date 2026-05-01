@@ -9,6 +9,7 @@ import { GroupRuntimeResumeInput, RuntimeQueueMode, RuntimeStateSnapshot } from 
 import { GroupAgentSessionService } from './group-agent-session.service';
 import { GroupRuntimeTaskService } from './group-runtime-task.service';
 import { PiMonoAdapter } from './pi-mono.adapter';
+import { ProjectRuntimeContextService } from './project-runtime-context.service';
 import { RoleProfileService } from './role-profile.service';
 
 @Injectable()
@@ -22,6 +23,7 @@ export class GroupRuntimeService {
     private readonly groupSessions: GroupAgentSessionService,
     private readonly roleProfiles: RoleProfileService,
     private readonly runtimeTasks: GroupRuntimeTaskService,
+    private readonly runtimeContext: ProjectRuntimeContextService,
     private readonly feishu: FeishuService,
     @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactQueue: Queue,
   ) {}
@@ -64,6 +66,9 @@ export class GroupRuntimeService {
       senderOpenId: input.senderOpenId,
       agentRole: AgentRole.manager,
     });
+    const resourceSummary = await this.runtimeContext.buildManagerResourceSummary({
+      projectId: input.projectId,
+    });
     const runtimeState = this.piMono.getRuntimeState(session.runtimeSessionKey);
     const queueMode = this.resolveQueueMode(input.prompt, ((groupPolicy as any)?.defaultQueueMode as RuntimeQueueMode) ?? 'collect', runtimeState);
 
@@ -102,6 +107,15 @@ export class GroupRuntimeService {
         sessionMemorySummary: session.memorySummary,
         repoReady: environment.repoSyncStatus === 'ready',
         repoHeadRef: environment.repoHeadRef,
+        groupPolicy: groupPolicy
+          ? {
+              mentionOnly: groupPolicy.mentionOnly,
+              allowDocWrite: groupPolicy.allowDocWrite,
+              allowTaskBoardWrite: groupPolicy.allowTaskBoardWrite,
+              highRiskActionsRequireConfirmation: groupPolicy.highRiskActionsRequireConfirmation,
+            }
+          : null,
+        resourceSummary,
       },
       envelope: {
         messageSourceId: input.messageSourceId,
@@ -152,6 +166,17 @@ export class GroupRuntimeService {
       senderOpenId: confirmation.confirmedBy ?? null,
       agentRole: AgentRole.manager,
     });
+    const groupPolicy = await this.prisma.groupPolicy.findFirst({
+      where: {
+        projectId: confirmation.projectId,
+        feishuChatId: confirmation.messageSource.feishuChatId,
+        archivedAt: null,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const resourceSummary = await this.runtimeContext.buildManagerResourceSummary({
+      projectId: confirmation.projectId,
+    });
 
     const result = await this.piMono.resumeSession({
       runtimeSessionKey: session.runtimeSessionKey,
@@ -187,6 +212,15 @@ export class GroupRuntimeService {
         sessionMemorySummary: session.memorySummary,
         repoReady: environment.repoSyncStatus === 'ready',
         repoHeadRef: environment.repoHeadRef,
+        groupPolicy: groupPolicy
+          ? {
+              mentionOnly: groupPolicy.mentionOnly,
+              allowDocWrite: groupPolicy.allowDocWrite,
+              allowTaskBoardWrite: groupPolicy.allowTaskBoardWrite,
+              highRiskActionsRequireConfirmation: groupPolicy.highRiskActionsRequireConfirmation,
+            }
+          : null,
+        resourceSummary,
       },
       event: {
         type: 'confirmation_resolved',

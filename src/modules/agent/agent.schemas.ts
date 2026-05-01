@@ -11,7 +11,17 @@ export const AGENT_OUTPUT_SCHEMA = {
       filePath: { type: 'string' },
       mimeType: { type: 'string' },
       tasks: { type: 'array' },
-      metadata: { type: 'object' },
+      metadata: {
+        type: 'object',
+        properties: {
+          persist: { type: 'boolean' },
+          targetChannels: {
+            type: 'array',
+            items: { enum: ['group_message', 'feishu_doc', 'bitable', 'internal_digest'] },
+          },
+        },
+        additionalProperties: true,
+      },
     },
   },
 } as const;

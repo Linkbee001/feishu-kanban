@@ -8,6 +8,7 @@ import {
   GroupPolicySnapshot,
   GroupRuntimeTaskSnapshot,
   ProjectContextBundle,
+  ProjectResourceSummary,
   ProjectMemberProfileSnapshot,
 } from './agent.types';
 import { FeishuProjectReader } from '../feishu/feishu-project-reader.service';
@@ -306,6 +307,62 @@ export class ProjectRuntimeContextService {
 
   readProjectBitable(input: { appToken?: string | null; tableId?: string | null }): Promise<BitableSnapshot | null> {
     return this.reader.readBitableSnapshot(input.appToken, input.tableId);
+  }
+
+  async buildManagerResourceSummary(input: { projectId: string }): Promise<ProjectResourceSummary> {
+    const project = await this.prisma.project.findUniqueOrThrow({
+      where: { id: input.projectId },
+      select: {
+        docFolderToken: true,
+        bitableAppToken: true,
+        bitableTableId: true,
+      },
+    });
+    const recentArtifacts = await this.getRecentArtifacts({ projectId: input.projectId, limit: 5 });
+
+    let recentDocs: ProjectResourceSummary['recentDocs'] = [];
+    if (project.docFolderToken) {
+      try {
+        const folder = await this.reader.scanProjectFolder(project.docFolderToken);
+        recentDocs = folder.documents.slice(0, 5).map((doc) => ({
+          title: doc.title,
+          updatedAt: doc.updatedAt,
+        }));
+      } catch {
+        recentDocs = [];
+      }
+    }
+
+    let taskBoardSummary: ProjectResourceSummary['taskBoardSummary'] = null;
+    if (project.bitableAppToken && project.bitableTableId) {
+      try {
+        const bitable = await this.reader.readBitableSnapshot(project.bitableAppToken, project.bitableTableId);
+        if (bitable) {
+          taskBoardSummary = {
+            pendingConfirmation: this.countBitableRowsByStatus(bitable, ['待确认']),
+            blocked: bitable.blockedTasks,
+            inProgress: this.countBitableRowsByStatus(bitable, ['进行中']),
+          };
+        }
+      } catch {
+        taskBoardSummary = null;
+      }
+    }
+
+    return {
+      hasDocFolder: Boolean(project.docFolderToken),
+      hasTaskBoard: Boolean(project.bitableAppToken && project.bitableTableId),
+      recentDocs,
+      taskBoardSummary,
+      recentArtifacts: recentArtifacts.slice(0, 5),
+    };
+  }
+
+  private countBitableRowsByStatus(snapshot: BitableSnapshot, statuses: string[]) {
+    return snapshot.recentRows.filter((row) => {
+      const fields = row.fields ?? {};
+      return Object.values(fields).some((value) => typeof value === 'string' && statuses.includes(value));
+    }).length;
   }
 }
 

@@ -144,6 +144,26 @@ export interface BitableSnapshot {
   recentRows: BitableRecordSnapshot[];
 }
 
+export interface ProjectResourceSummary {
+  hasDocFolder: boolean;
+  hasTaskBoard: boolean;
+  recentDocs: Array<{
+    title: string;
+    updatedAt?: string | null;
+  }>;
+  taskBoardSummary?: {
+    pendingConfirmation: number;
+    blocked: number;
+    inProgress: number;
+  } | null;
+  recentArtifacts: Array<{
+    title: string;
+    type: string;
+    createdAt: string;
+    feishuUrl?: string | null;
+  }>;
+}
+
 export interface ProjectContextBundle {
   project: {
     id: string;
@@ -234,6 +254,7 @@ export interface CompiledRoleProfile {
 
 export interface GroupRuntimeTaskSnapshot {
   id: string;
+  runtimeRef?: string | null;
   title: string;
   description?: string | null;
   intent: string;
@@ -254,6 +275,11 @@ export interface RuntimeMinimalContext {
   sessionMemorySummary?: string | null;
   repoReady?: boolean;
   repoHeadRef?: string | null;
+  groupPolicy?: Pick<
+    GroupPolicySnapshot,
+    'mentionOnly' | 'allowDocWrite' | 'allowTaskBoardWrite' | 'highRiskActionsRequireConfirmation'
+  > | null;
+  resourceSummary?: ProjectResourceSummary | null;
 }
 
 export interface RuntimeContextBinding {

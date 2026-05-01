@@ -1,4 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
+import { ConfigService } from '@nestjs/config';
 import { Injectable, Logger } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -32,11 +33,18 @@ type ProjectInitAssistantResponse = {
   missingFields?: string[];
 };
 
+type ChatBotBinding = {
+  appId?: string;
+  botOpenId?: string;
+  botName?: string;
+};
+
 @Injectable()
 export class FeishuEventService {
   private readonly logger = new Logger(FeishuEventService.name);
 
   constructor(
+    private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly agent: AgentService,
     private readonly groupSessions: GroupAgentSessionService,
@@ -60,13 +68,12 @@ export class FeishuEventService {
 
   async handle(payload: any, traceId = `tr_${Date.now()}`) {
     const eventId = payload?.header?.event_id ?? payload?.uuid ?? payload?.event?.event_id ?? traceId;
+    const eventType = payload?.header?.event_type ?? payload?.event_type;
     const message = payload?.event?.message;
     const chatId = message?.chat_id ?? payload?.event?.operator?.open_id;
     const messageId = message?.message_id ?? eventId;
     const senderOpenId =
       payload?.event?.sender?.sender_id?.open_id ?? payload?.event?.operator?.open_id ?? 'unknown';
-    const parsedMessage = this.extractMessage(message);
-    const rawText = parsedMessage.rawText;
 
     const created = await this.prisma.feishuEventDedup
       .create({
@@ -87,13 +94,34 @@ export class FeishuEventService {
       return;
     }
 
+    if (eventType === 'im.chat.member.bot.added_v1') {
+      await this.handleBotAddedEvent(payload, senderOpenId);
+      return;
+    }
+
     if (!message || !chatId) return;
 
     const sourceType = message.chat_type === 'p2p' ? 'private' : 'group';
+    const botBinding = sourceType === 'group' ? await this.groupSessions.getBotBinding(chatId) : null;
+    const parsedMessage = this.extractMessage(message, {
+      eventAppId: payload?.header?.app_id,
+      botBinding,
+    });
+    const rawText = parsedMessage.rawText;
+    const normalizedPrompt = parsedMessage.normalizedText;
     const replyTarget =
       sourceType === 'group'
         ? { receiveIdType: 'chat_id', receiveId: chatId }
         : { receiveIdType: 'open_id', receiveId: senderOpenId };
+
+    if (sourceType === 'group' && parsedMessage.matchedBotMention) {
+      await this.groupSessions.upsertBotBinding({
+        feishuChatId: chatId,
+        appId: this.asOptionalString(parsedMessage.matchedBotMention.appId) ?? payload?.header?.app_id ?? null,
+        botOpenId: this.asOptionalString(parsedMessage.matchedBotMention.id),
+        botName: this.asOptionalString(parsedMessage.matchedBotMention.name),
+      });
+    }
 
     if (sourceType === 'private') {
       const selection = await this.trySelectProjectFromPrivateChat(chatId, senderOpenId, rawText);
@@ -122,7 +150,7 @@ export class FeishuEventService {
 
     if (!project) {
       if (sourceType === 'group') {
-        await this.handleUninitializedGroup(chatId, senderOpenId, rawText, traceId);
+        await this.handleUninitializedGroup(chatId, senderOpenId, normalizedPrompt, traceId);
       } else {
         await this.feishu.sendTextMessage(
           replyTarget.receiveIdType,
@@ -175,6 +203,9 @@ export class FeishuEventService {
     }
 
     if (sourceType === 'group') {
+      this.logger.log(
+        `group message routed check: chat=${chatId} mentioned=${parsedMessage.isBotMentioned} reason=${parsedMessage.botMentionMatchReason ?? 'none'} normalized="${normalizedPrompt}" raw="${rawText}"`,
+      );
       if (groupPolicy?.mentionOnly !== false && !parsedMessage.isBotMentioned) {
         return;
       }
@@ -185,7 +216,7 @@ export class FeishuEventService {
         feishuChatId: chatId,
         messageSourceId: source.id,
         feishuMessageId: messageId,
-        prompt: rawText,
+        prompt: normalizedPrompt,
         senderOpenId,
         traceId,
       });
@@ -198,7 +229,7 @@ export class FeishuEventService {
       environmentId: environment.id,
       feishuChatId: chatId,
       messageSourceId: source.id,
-      prompt: rawText,
+      prompt: normalizedPrompt,
       senderOpenId,
       traceId,
     });
@@ -568,33 +599,78 @@ export class FeishuEventService {
     ].join('\n');
   }
 
-  private extractMessage(message: any) {
+  private async handleBotAddedEvent(payload: any, senderOpenId: string) {
+    const binding = this.extractBotAddedBinding(payload);
+    if (!binding.chatId) {
+      this.logger.warn(`bot added event missing chat id: ${JSON.stringify(payload?.event ?? {})}`);
+      return;
+    }
+
+    const project = await this.prisma.project.findUnique({
+      where: { feishuChatId: binding.chatId },
+      select: {
+        id: true,
+        defaultEnvironmentId: true,
+      },
+    });
+
+    await this.groupSessions.upsertBotBinding({
+      feishuChatId: binding.chatId,
+      projectId: project?.id ?? null,
+      environmentId: project?.defaultEnvironmentId ?? null,
+      appId: binding.appId ?? payload?.header?.app_id ?? null,
+      botOpenId: binding.botOpenId ?? null,
+      botName: binding.botName ?? null,
+      installedByOpenId: binding.installedByOpenId ?? senderOpenId,
+    });
+
+    this.logger.log(
+      `bot binding initialized: chat=${binding.chatId} appId=${binding.appId ?? payload?.header?.app_id ?? 'unknown'} botOpenId=${binding.botOpenId ?? 'unknown'}`,
+    );
+
+    await this.feishu.sendTextMessage(
+      'chat_id',
+      binding.chatId,
+      '机器人已加入本群并完成绑定。直接 @我 发送需求即可；如果本群还没初始化项目，我会先引导初始化。',
+    );
+  }
+
+  private extractMessage(message: any, input: { eventAppId?: string; botBinding?: ChatBotBinding | null }) {
     if (!message?.content) {
       return {
         rawText: '',
+        normalizedText: '',
         rawContentJson: null,
         mentionsJson: [],
         isBotMentioned: false,
+        botMentionMatchReason: null,
+        matchedBotMention: null,
       };
     }
     try {
       const content = JSON.parse(message.content);
       const mentions = this.collectMentions(message, content);
       const rawText = content.text ?? content.title ?? JSON.stringify(content);
-      const fallbackMentioned = this.hasTextualBotMention(rawText);
+      const mentionMatch = this.matchBotMention(mentions, rawText, input);
       return {
         rawText,
+        normalizedText: this.normalizePrompt(rawText, mentions),
         rawContentJson: content,
         mentionsJson: mentions,
-        isBotMentioned: this.hasBotMention(mentions) || (mentions.length === 0 && fallbackMentioned),
+        isBotMentioned: mentionMatch.matched,
+        botMentionMatchReason: mentionMatch.matched ? mentionMatch.reason : null,
+        matchedBotMention: mentionMatch.mention ?? null,
       };
     } catch {
       const rawText = String(message.content);
       return {
         rawText,
+        normalizedText: rawText,
         rawContentJson: null,
         mentionsJson: [],
-        isBotMentioned: this.hasTextualBotMention(rawText),
+        isBotMentioned: false,
+        botMentionMatchReason: null,
+        matchedBotMention: null,
       };
     }
   }
@@ -603,15 +679,16 @@ export class FeishuEventService {
     const fromContent = Array.isArray(content?.mentions) ? content.mentions : [];
     const fromMessage = Array.isArray(message?.mentions) ? message.mentions : [];
     const merged = [...fromContent, ...fromMessage];
-    const deduped = new Map<string, { id?: string; name?: string; key?: string }>();
+    const deduped = new Map<string, { id?: string; appId?: string; name?: string; key?: string }>();
     for (const item of merged) {
       const mention = {
         id: item?.id ?? item?.open_id ?? item?.user_id,
+        appId: item?.app_id ?? item?.application_id ?? item?.bot_app_id,
         name: item?.name ?? item?.display_name ?? item?.tenant_name,
         key: item?.key,
         mentionedType: item?.mentioned_type ?? item?.type ?? null,
       };
-      const dedupeKey = mention.key ?? mention.id ?? mention.name;
+      const dedupeKey = mention.key ?? mention.id ?? mention.appId ?? mention.name;
       if (!dedupeKey) {
         continue;
       }
@@ -620,16 +697,87 @@ export class FeishuEventService {
     return Array.from(deduped.values());
   }
 
-  private hasTextualBotMention(rawText: string) {
-    const text = rawText.trim();
-    if (!text) {
-      return false;
+  private matchBotMention(
+    mentions: Array<Record<string, unknown>>,
+    rawText: string,
+    input: { eventAppId?: string; botBinding?: ChatBotBinding | null },
+  ) {
+    const botIds = this.botMentionIds(input.botBinding);
+    const botMentions = mentions.filter((item) => item.mentionedType === 'bot');
+
+    if (!botMentions.length) {
+      return { matched: false, reason: null as string | null, mention: null as Record<string, unknown> | null };
     }
-    return /^@_user_\d+\s+/i.test(text);
+
+    // Once this chat has a bound bot open_id, only that exact bot mention may trigger a response.
+    if (input.botBinding?.botOpenId?.trim()) {
+      const matchedByBoundId = botMentions.find((item) => {
+        const id = typeof item.id === 'string' ? item.id.trim().toLowerCase() : '';
+        return !!id && botIds.includes(id);
+      });
+      if (matchedByBoundId) {
+        return { matched: true, reason: 'bound_open_id', mention: matchedByBoundId };
+      }
+      return { matched: false, reason: null as string | null, mention: null as Record<string, unknown> | null };
+    }
+
+    const firstBotMention = botMentions[0] ?? null;
+    if (firstBotMention) {
+      return { matched: true, reason: 'unbound_bot_mention', mention: firstBotMention };
+    }
+
+    return { matched: false, reason: null as string | null, mention: null as Record<string, unknown> | null };
   }
 
-  private hasBotMention(mentions: Array<Record<string, unknown>>) {
-    return mentions.some((item) => item.mentionedType === 'bot');
+  private botMentionIds(botBinding?: ChatBotBinding | null) {
+    const configured = this.config.get<string>('FEISHU_BOT_OPEN_ID') ?? '';
+    return [botBinding?.botOpenId, ...configured.split(',')]
+      .map((value) => String(value ?? '').trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  private normalizePrompt(rawText: string, mentions: Array<Record<string, unknown>>) {
+    let normalized = rawText.trim();
+    for (const mention of mentions) {
+      const key = typeof mention.key === 'string' ? mention.key.trim() : '';
+      if (key && normalized.startsWith(key)) {
+        normalized = normalized.slice(key.length).trimStart();
+        continue;
+      }
+      const name = typeof mention.name === 'string' ? mention.name.trim() : '';
+      if (name) {
+        const prefix = `@${name}`;
+        if (normalized.startsWith(prefix)) {
+          normalized = normalized.slice(prefix.length).trimStart();
+        }
+      }
+    }
+    return normalized;
+  }
+
+  private extractBotAddedBinding(payload: any) {
+    const event = payload?.event ?? {};
+    return {
+      chatId: event?.chat_id ?? event?.chat?.chat_id ?? event?.open_chat_id ?? event?.chatId ?? null,
+      appId: payload?.header?.app_id ?? event?.app_id ?? event?.appId ?? null,
+      botOpenId:
+        event?.bot?.open_id ??
+        event?.bot_open_id ??
+        event?.member?.open_id ??
+        event?.member?.member_id ??
+        event?.open_id ??
+        null,
+      botName: event?.bot?.name ?? event?.member?.name ?? event?.bot_name ?? null,
+      installedByOpenId:
+        event?.operator?.open_id ??
+        event?.operator_id?.open_id ??
+        event?.operatorOpenId ??
+        null,
+    };
+  }
+
+  private asOptionalString(value: unknown) {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
   }
 
   private buildBusyReply() {

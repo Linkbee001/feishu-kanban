@@ -1,24 +1,18 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { RoleProfileService } from '../agent/role-profile.service';
+import { DEFAULT_MANAGER_SKILLS } from '../agent/role-profile.service';
 
 @Injectable()
 export class GroupPolicyService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly roleProfiles: RoleProfileService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async ensureDefaultPolicy(input: {
     projectId: string;
     feishuChatId: string;
     defaultEnvironmentId?: string | null;
   }) {
-    const profile = await this.roleProfiles.getRoleProfile('manager');
-    const skills = Array.isArray(profile.skillsJson)
-      ? profile.skillsJson.map((item) => String(item).trim()).filter(Boolean)
-      : [];
+    const skills = [...DEFAULT_MANAGER_SKILLS];
 
     return this.prisma.groupPolicy.upsert({
       where: {

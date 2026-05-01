@@ -53,6 +53,10 @@ describe('GroupRuntimeService', () => {
       groupPolicy: {
         findFirst: jest.fn().mockResolvedValue({
           defaultQueueMode: 'collect',
+          mentionOnly: true,
+          allowDocWrite: true,
+          allowTaskBoardWrite: true,
+          highRiskActionsRequireConfirmation: true,
         }),
       },
       confirmationRequest: {
@@ -97,6 +101,19 @@ describe('GroupRuntimeService', () => {
     const runtimeTasks = {
       listForSession: jest.fn().mockResolvedValue([]),
     };
+    const runtimeContext = {
+      buildManagerResourceSummary: jest.fn().mockResolvedValue({
+        hasDocFolder: true,
+        hasTaskBoard: true,
+        recentDocs: [{ title: 'PRD', updatedAt: '2026-04-30T00:00:00.000Z' }],
+        taskBoardSummary: {
+          pendingConfirmation: 1,
+          blocked: 2,
+          inProgress: 3,
+        },
+        recentArtifacts: [{ title: 'Plan', type: 'document', createdAt: '2026-04-30T00:00:00.000Z' }],
+      }),
+    };
     const feishu = {
       addMessageReaction: jest.fn().mockResolvedValue({ data: { reaction_id: 'reaction_1' } }),
       removeMessageReaction: jest.fn().mockResolvedValue(undefined),
@@ -109,6 +126,7 @@ describe('GroupRuntimeService', () => {
       groupSessions as any,
       roleProfiles as any,
       runtimeTasks as any,
+      runtimeContext as any,
       feishu as any,
       artifactQueue as any,
     );
@@ -119,12 +137,13 @@ describe('GroupRuntimeService', () => {
       piMono,
       groupSessions,
       roleProfiles,
+      runtimeContext,
       session,
     };
   };
 
   it('submits a group message into the runtime orchestrator', async () => {
-    const { service, piMono, groupSessions } = createService();
+    const { service, piMono, groupSessions, runtimeContext } = createService();
 
     const result = await service.handleMentionMessage({
       projectId: 'project_1',
@@ -146,6 +165,17 @@ describe('GroupRuntimeService', () => {
       expect.objectContaining({
         runtimeSessionKey: 'chat:chat_1:manager',
         queueMode: 'collect',
+        minimalContext: expect.objectContaining({
+          groupPolicy: expect.objectContaining({
+            allowDocWrite: true,
+            allowTaskBoardWrite: true,
+            highRiskActionsRequireConfirmation: true,
+          }),
+          resourceSummary: expect.objectContaining({
+            hasDocFolder: true,
+            hasTaskBoard: true,
+          }),
+        }),
         envelope: expect.objectContaining({
           messageSourceId: 'source_1',
           rawText: '[SMOKE_CREATE_TASK]',
@@ -153,6 +183,9 @@ describe('GroupRuntimeService', () => {
         }),
       }),
     );
+    expect(runtimeContext.buildManagerResourceSummary).toHaveBeenCalledWith({
+      projectId: 'project_1',
+    });
     expect(groupSessions.syncRuntimeSessionState).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'session_1',

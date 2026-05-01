@@ -206,4 +206,40 @@ describe('FeishuProjectReader', () => {
       }),
     );
   });
+
+  it('resolves a document title to a real token before requesting raw content', async () => {
+    const { reader, feishu } = createReader();
+
+    feishu.listDriveFiles.mockResolvedValue({
+      data: {
+        files: [
+          {
+            token: 'doxcn1234567890123456789012',
+            type: 'docx',
+            name: '项目说明文档 - README.md',
+            edit_time: '2026-04-30T00:00:00.000Z',
+          },
+        ],
+        has_more: false,
+      },
+    });
+    feishu.getDocumentRawContent.mockResolvedValue({
+      data: {
+        content: 'README body',
+      },
+    });
+
+    const doc = await reader.readProjectDocument('项目说明文档 - README.md', '项目说明文档 - README.md', {
+      folderToken: 'root',
+    });
+
+    expect(feishu.getDocumentRawContent).toHaveBeenCalledWith('doxcn1234567890123456789012');
+    expect(doc).toEqual(
+      expect.objectContaining({
+        token: 'doxcn1234567890123456789012',
+        title: '项目说明文档 - README.md',
+        summary: 'README body',
+      }),
+    );
+  });
 });

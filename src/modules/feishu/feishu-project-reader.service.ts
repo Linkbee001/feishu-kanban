@@ -155,52 +155,75 @@ export class FeishuProjectReader {
     options: {
       maxContentLength?: number;
       preserveMissingAsNull?: boolean;
+      folderToken?: string | null;
     } = {},
   ): Promise<FeishuDocumentSnapshot | null> {
     const normalizedToken = token?.trim();
-    if (!normalizedToken) {
-      return null;
+    const resolvedToken = await this.resolveDocumentToken(normalizedToken, title, options.folderToken);
+    const effectiveTitle = title?.trim() || normalizedToken || resolvedToken;
+    if (!resolvedToken) {
+      return options.preserveMissingAsNull ?? true
+        ? null
+        : {
+            token: normalizedToken ?? effectiveTitle ?? 'unknown-doc',
+            title: effectiveTitle || 'Unknown document',
+            type: 'docx',
+            rawContent: null,
+            summary: 'Unable to resolve a valid Feishu document token from the provided title or identifier.',
+            url: null,
+            updatedAt: null,
+          };
     }
 
-    const cached = this.getCachedDocument(normalizedToken);
+    const documentMeta = options.folderToken
+      ? await this.findDocumentEntry(options.folderToken, resolvedToken, effectiveTitle)
+      : null;
+    const finalTitle = documentMeta?.title ?? effectiveTitle ?? resolvedToken ?? 'Unknown document';
+    if (!normalizedToken) {
+      if (!resolvedToken) {
+        return null;
+      }
+    }
+
+    const cached = this.getCachedDocument(resolvedToken);
     if (cached) {
-      return this.withDocumentOverrides(cached, title, options.maxContentLength);
+      return this.withDocumentOverrides(cached, finalTitle, options.maxContentLength);
     }
 
     try {
-      const raw = await this.feishu.getDocumentRawContent(normalizedToken);
+      const raw = await this.feishu.getDocumentRawContent(resolvedToken);
       const rawContent =
         raw?.data?.content ??
         raw?.data?.raw_content ??
         raw?.data?.rawContent ??
         '';
       const snapshot: FeishuDocumentSnapshot = {
-        token: normalizedToken,
-        title: title?.trim() || normalizedToken,
+        token: resolvedToken,
+        title: finalTitle,
         type: 'docx',
         rawContent: rawContent.slice(0, options.maxContentLength ?? 8_000),
         summary: this.summarize(rawContent),
-        url: this.feishu.documentUrl(normalizedToken),
-        updatedAt: null,
+        url: documentMeta?.url ?? this.feishu.documentUrl(resolvedToken),
+        updatedAt: documentMeta?.updatedAt ?? null,
       };
-      this.setDocumentCache(normalizedToken, snapshot);
+      this.setDocumentCache(resolvedToken, snapshot);
       return snapshot;
     } catch (error) {
       if (this.isRateLimitError(error)) {
-        const stale = this.getStaleDocument(normalizedToken);
+        const stale = this.getStaleDocument(resolvedToken);
         if (stale) {
-          this.logger.warn(`Feishu doc raw_content rate limited for ${normalizedToken}; using cached snapshot`);
-          return this.withDocumentOverrides(stale, title, options.maxContentLength);
+          this.logger.warn(`Feishu doc raw_content rate limited for ${resolvedToken}; using cached snapshot`);
+          return this.withDocumentOverrides(stale, finalTitle, options.maxContentLength);
         }
 
         return {
-          token: normalizedToken,
-          title: title?.trim() || normalizedToken,
+          token: resolvedToken,
+          title: finalTitle,
           type: 'docx',
           rawContent: null,
           summary: 'Feishu document content is temporarily unavailable because the doc API is rate limited.',
-          url: this.feishu.documentUrl(normalizedToken),
-          updatedAt: null,
+          url: documentMeta?.url ?? this.feishu.documentUrl(resolvedToken),
+          updatedAt: documentMeta?.updatedAt ?? null,
         };
       }
 
@@ -487,6 +510,49 @@ export class FeishuProjectReader {
 
   private isReadableDocument(type: string) {
     return ['docx', 'doc'].includes(type.toLowerCase());
+  }
+
+  private async resolveDocumentToken(
+    tokenOrTitle?: string | null,
+    title?: string | null,
+    folderToken?: string | null,
+  ) {
+    const normalizedIdentifier = tokenOrTitle?.trim();
+    if (normalizedIdentifier && this.looksLikeDocumentToken(normalizedIdentifier)) {
+      return normalizedIdentifier;
+    }
+
+    const targetTitle = (title?.trim() || normalizedIdentifier || '').trim();
+    if (!folderToken || !targetTitle) {
+      return null;
+    }
+
+    const match = await this.findDocumentEntry(folderToken, normalizedIdentifier ?? null, targetTitle);
+    return match?.token ?? null;
+  }
+
+  private async findDocumentEntry(
+    folderToken: string,
+    tokenOrTitle?: string | null,
+    title?: string | null,
+  ): Promise<FeishuFolderEntrySnapshot | null> {
+    const folder = await this.scanProjectFolder(folderToken, { includeDocumentContents: false });
+    const normalizedIdentifier = tokenOrTitle?.trim().toLowerCase();
+    const normalizedTitle = title?.trim().toLowerCase();
+    return (
+      folder.entries.find((entry) => {
+        if (!this.isReadableDocument(entry.type)) {
+          return false;
+        }
+        const tokenMatched = normalizedIdentifier ? entry.token.toLowerCase() === normalizedIdentifier : false;
+        const titleMatched = normalizedTitle ? entry.title.trim().toLowerCase() === normalizedTitle : false;
+        return tokenMatched || titleMatched;
+      }) ?? null
+    );
+  }
+
+  private looksLikeDocumentToken(value: string) {
+    return /^[A-Za-z0-9_-]{3,}$/.test(value.trim());
   }
 
   private withDocumentOverrides(
