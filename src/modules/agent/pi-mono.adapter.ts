@@ -385,11 +385,17 @@ export class PiMonoAdapter {
         queueMode: input.queueMode ?? 'collect',
       });
 
+      this.logger.log(
+        `[SUBMIT CHECK] activeExecution=${state.activeExecution?.mode} isStreaming=${state.session.isStreaming} waitingReason=${state.waitingReason ?? 'none'} currentTurn=${state.currentTurn?.turnId ?? 'none'}`,
+      );
+
       if (state.activeExecution?.mode === 'group_runtime' && state.session.isStreaming) {
+        this.logger.log(`[SUBMIT] branch: handleStreamingSubmission`);
         return this.handleStreamingSubmission(state, input);
       }
 
       if (state.waitingReason) {
+        this.logger.log(`[SUBMIT] branch: waitingReason=${state.waitingReason}`);
         const queued = this.enqueueRuntimeMessage(state, input.queueMode ?? 'collect', envelope);
         await this.recordRuntimeEvent(state, queued.type, queued.payload);
         return {
@@ -401,6 +407,7 @@ export class PiMonoAdapter {
       }
 
       if (state.currentTurn) {
+        this.logger.log(`[SUBMIT] branch: currentTurn exists`);
         const queued = this.enqueueRuntimeMessage(state, input.queueMode ?? 'collect', envelope);
         await this.recordRuntimeEvent(state, queued.type, queued.payload);
         return {
@@ -411,6 +418,8 @@ export class PiMonoAdapter {
         } satisfies RuntimeSubmitResult;
       }
 
+      this.logger.log(`[SUBMIT] branch: creating new turn`);
+
       const turnId = randomUUID();
       state.currentTurn = {
         turnId,
@@ -418,6 +427,9 @@ export class PiMonoAdapter {
         mode: 'group_runtime',
         messageSourceId: envelope.messageSourceId,
       };
+      this.logger.log(
+        `[RUNTIME TURN] scheduling turn execution: session=${state.runtimeSessionKey} turnId=${turnId}`,
+      );
       void this.runRuntimeTurn({
         state,
         project: input.project,
@@ -432,6 +444,10 @@ export class PiMonoAdapter {
           senderOpenId: envelope.senderOpenId,
           traceId: envelope.traceId,
         },
+      }).catch((error) => {
+        this.logger.error(
+          `[RUNTIME TURN] unhandled error in fire-and-forget turn: session=${state.runtimeSessionKey} turnId=${turnId} error=${error instanceof Error ? error.message : String(error)}`,
+        );
       });
 
       return {
@@ -767,7 +783,13 @@ export class PiMonoAdapter {
         });
       }, input.timeoutMs);
 
+      this.logger.log(
+        `[PI-MONO SDK] calling session.prompt: session=${state.runtimeSessionKey} promptLength=${input.payload.prompt?.length ?? 0}`,
+      );
       await state.session.prompt(this.buildPrompt(input.payload));
+      this.logger.log(
+        `[PI-MONO SDK] session.prompt completed: session=${state.runtimeSessionKey}`,
+      );
 
       const lastAssistantText = state.session.getLastAssistantText()?.trim();
       state.lastAssistantText = lastAssistantText;
@@ -779,9 +801,14 @@ export class PiMonoAdapter {
         throw new PiMonoExecutionAbortError('CANCELED', 'pi mono group runtime turn canceled');
       }
 
+      const finalActions = this.ensureGroupRuntimeReplyAction(execution.actions ?? [], execution.outputs, lastAssistantText);
+      const replyAction = finalActions.find(a => a.type === 'reply_group');
+      this.logger.log(
+        `[PI-MONO RESULT] status=succeeded actions=${finalActions.length} outputs=${execution.outputs?.length ?? 0} reply_group=${replyAction ? `"${(replyAction as any).text?.slice(0, 200)}..."` : 'none'}`,
+      );
       return {
         status: 'succeeded',
-        actions: this.ensureGroupRuntimeReplyAction(execution.actions ?? [], execution.outputs, lastAssistantText),
+        actions: finalActions,
         outputs: execution.outputs,
         outputSummary: execution.outputs.length ? this.buildOutputSummary(execution.outputs) : undefined,
         session: this.buildSessionSnapshot(state, execution.outputs, lastAssistantText),
@@ -791,18 +818,28 @@ export class PiMonoAdapter {
       state.lastAssistantText = lastAssistantText;
 
       if (execution.timedOut || (error instanceof PiMonoExecutionAbortError && error.code === 'TIMEOUT')) {
+        const timeoutActions = execution.actions ?? [];
+        const timeoutReply = timeoutActions.find(a => a.type === 'reply_group');
+        this.logger.log(
+          `[PI-MONO RESULT] status=timeout actions=${timeoutActions.length} outputs=${execution.outputs?.length ?? 0} reply_group=${timeoutReply ? `"${(timeoutReply as any).text?.slice(0, 200)}..."` : 'none'}`,
+        );
         return {
           status: 'timeout',
-          actions: execution.actions ?? [],
+          actions: timeoutActions,
           outputs: execution.outputs,
           session: this.buildSessionSnapshot(state, execution.outputs, lastAssistantText),
         };
       }
 
       if (execution.canceled || (error instanceof PiMonoExecutionAbortError && error.code === 'CANCELED')) {
+        const cancelActions = execution.actions ?? [];
+        const cancelReply = cancelActions.find(a => a.type === 'reply_group');
+        this.logger.log(
+          `[PI-MONO RESULT] status=canceled actions=${cancelActions.length} outputs=${execution.outputs?.length ?? 0} reply_group=${cancelReply ? `"${(cancelReply as any).text?.slice(0, 200)}..."` : 'none'}`,
+        );
         return {
           status: 'canceled',
-          actions: execution.actions ?? [],
+          actions: cancelActions,
           outputs: execution.outputs,
           session: this.buildSessionSnapshot(state, execution.outputs, lastAssistantText),
         };
@@ -2145,6 +2182,9 @@ export class PiMonoAdapter {
     reasonText: string;
     source: PiMonoCreateRunRequest['source'];
   }) {
+    this.logger.log(
+      `[RUNTIME TURN] entered: session=${input.state.runtimeSessionKey} hasTurn=${!!input.state.currentTurn}`,
+    );
     const state = input.state;
     const turn = state.currentTurn;
     const contextBinding = state.currentContextBinding
@@ -2156,6 +2196,9 @@ export class PiMonoAdapter {
         }
       : undefined;
     if (!turn) {
+      this.logger.warn(
+        `[RUNTIME TURN] aborted: no currentTurn found for session=${state.runtimeSessionKey}`,
+      );
       return;
     }
 
@@ -2169,6 +2212,9 @@ export class PiMonoAdapter {
     );
 
     try {
+      this.logger.log(
+        `[RUNTIME TURN] calling executeGroupRuntimePrompt: session=${state.runtimeSessionKey} turn=${turn.turnId}`,
+      );
       const result = await this.executeGroupRuntimePrompt({
         payload: {
           runtimeSessionKey: state.runtimeSessionKey,
@@ -2190,6 +2236,9 @@ export class PiMonoAdapter {
         },
         timeoutMs: this.resolveGroupRuntimeTimeoutMs(),
       });
+      this.logger.log(
+        `[RUNTIME TURN] executeGroupRuntimePrompt returned: session=${state.runtimeSessionKey} turn=${turn.turnId} status=${result.status}`,
+      );
       this.logger.log(
         `runtime turn result: session=${state.runtimeSessionKey} turn=${turn.turnId} status=${result.status} actions=${result.actions.length} outputs=${result.outputs?.length ?? 0}`,
       );
@@ -2220,20 +2269,17 @@ export class PiMonoAdapter {
         }
       }
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.log(
+        `[PI-MONO RESULT] status=exception error="${errorMsg.slice(0, 200)}" actions=0 outputs=0 reply_group=none`,
+      );
       this.logger.warn(
-        `runtime turn exception: session=${state.runtimeSessionKey} turn=${turn.turnId} ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `runtime turn exception: session=${state.runtimeSessionKey} turn=${turn.turnId} ${errorMsg}`,
       );
       await this.recordRuntimeEvent(state, 'turn_failed', {
         turnId: turn.turnId,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: errorMsg,
       }, contextBinding);
-      this.logger.warn(
-        `Runtime turn ${turn.turnId} failed in session ${state.runtimeSessionKey}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
     } finally {
       state.currentTurn = undefined;
       this.logger.log(
