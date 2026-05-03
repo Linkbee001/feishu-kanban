@@ -19,6 +19,7 @@ import {
 import { GROUP_AGENT_SESSION_REDIS } from './agent.constants';
 import { PiMonoAdapter } from './pi-mono.adapter';
 import { SummaryPolicy } from './agent.types';
+import { SessionStateService } from './session-state.service';
 
 type SessionState = {
   bootstrapDraft?: Record<string, string | undefined>;
@@ -40,6 +41,7 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly piMono: PiMonoAdapter,
+    private readonly sessionState: SessionStateService,
     @Inject(GROUP_AGENT_SESSION_REDIS) private readonly redis: Redis,
   ) {}
 
@@ -326,29 +328,6 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
     }
     if (input.touchRunAt) {
       data.lastRunAt = new Date();
-    }
-
-    return this.prisma.groupAgentSession.update({
-      where: { id: input.sessionId },
-      data,
-    });
-  }
-
-  async syncGroupRuntimeState(input: {
-    sessionId: string;
-    currentRuntimeTaskId?: string | null;
-    runtimeStateJson?: Record<string, unknown>;
-    touchRuntimeTurnAt?: boolean;
-  }) {
-    const data: Record<string, unknown> = {};
-    if (input.currentRuntimeTaskId !== undefined) {
-      data.currentRuntimeTaskId = input.currentRuntimeTaskId;
-    }
-    if (input.runtimeStateJson !== undefined) {
-      data.runtimeStateJson = input.runtimeStateJson;
-    }
-    if (input.touchRuntimeTurnAt) {
-      data.lastRuntimeTurnAt = new Date();
     }
 
     return this.prisma.groupAgentSession.update({

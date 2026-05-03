@@ -196,11 +196,8 @@ export class GroupRuntimeService {
       });
     }
     if (runtimeState) {
-      await this.groupSessions.syncGroupRuntimeState({
-        sessionId,
-        currentRuntimeTaskId: null,
-        runtimeStateJson: runtimeState as any,
-        touchRuntimeTurnAt: true,
+      await this.sessionState.updateRuntimeStateJson(sessionId, {
+        runtimeState: runtimeState,
       });
     }
   }
@@ -220,17 +217,12 @@ export class GroupRuntimeService {
         response?.data?.reaction_id ??
         response?.data?.id ??
         null;
-      const currentState = await this.loadPersistedRuntimeState(sessionId);
-      await this.groupSessions.syncGroupRuntimeState({
-        sessionId,
-        runtimeStateJson: {
-          ...currentState,
-          processingReaction: {
-            messageSourceId,
-            feishuMessageId,
-            reactionId,
-            reactionType: this.processingReactionType,
-          },
+      await this.sessionState.updateRuntimeStateJson(sessionId, {
+        processingReaction: {
+          messageSourceId,
+          feishuMessageId,
+          reactionId,
+          reactionType: this.processingReactionType,
         },
       });
     } catch (error) {
@@ -243,7 +235,7 @@ export class GroupRuntimeService {
   }
 
   private async clearProcessingReaction(sessionId: string) {
-    const runtimeState = await this.loadPersistedRuntimeState(sessionId);
+    const runtimeState = await this.sessionState.getRuntimeStateJson(sessionId);
     const reaction =
       runtimeState.processingReaction &&
       typeof runtimeState.processingReaction === 'object' &&
@@ -263,20 +255,8 @@ export class GroupRuntimeService {
         );
       }
     }
-    const nextState = { ...runtimeState };
-    delete nextState.processingReaction;
-    await this.groupSessions.syncGroupRuntimeState({
-      sessionId,
-      runtimeStateJson: nextState,
-    });
-  }
-
-  private async loadPersistedRuntimeState(sessionId: string) {
-    const session = await this.prisma.groupAgentSession.findUnique({
-      where: { id: sessionId },
-      select: { runtimeStateJson: true },
-    });
-    return this.readRuntimeState(session?.runtimeStateJson);
+    delete runtimeState.processingReaction;
+    await this.sessionState.updateRuntimeStateJson(sessionId, runtimeState);
   }
 
   private readRuntimeSnapshot(value: unknown): RuntimeState | null {
@@ -305,10 +285,4 @@ export class GroupRuntimeService {
     }));
   }
 
-  private readRuntimeState(value: unknown) {
-    return value && typeof value === 'object' && !Array.isArray(value)
-      ? ({ ...(value as Record<string, unknown>) })
-      : {};
-  }
-
-  }
+}
