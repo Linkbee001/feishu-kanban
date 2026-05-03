@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { RuntimeState } from './session-context.types';
+import { Prisma } from '@prisma/client';
 
 /**
  * Valid state transitions for RuntimeState.
@@ -98,7 +99,7 @@ export class SessionStateService {
     delete current.confirmationRequestId;
     await this.prisma.groupAgentSession.update({
       where: { id: sessionId },
-      data: { runtimeStateJson: current },
+      data: { runtimeStateJson: current as Prisma.InputJsonValue },
     });
   }
 
@@ -126,7 +127,7 @@ export class SessionStateService {
     await this.prisma.groupAgentSession.update({
       where: { id: sessionId },
       data: {
-        runtimeStateJson: { ...current, ...updates },
+        runtimeStateJson: { ...current, ...updates } as Prisma.InputJsonValue,
         lastRuntimeTurnAt: new Date(),
       },
     });

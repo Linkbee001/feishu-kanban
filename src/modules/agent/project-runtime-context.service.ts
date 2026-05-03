@@ -249,7 +249,6 @@ export class ProjectRuntimeContextService {
       return {
         enabled: policy.enabled,
         mentionOnly: policy.mentionOnly,
-        defaultQueueMode: ((policy as any).defaultQueueMode ?? 'collect') as GroupPolicySnapshot['defaultQueueMode'],
         allowedSkills: Array.isArray(policy.allowedSkillsJson)
         ? policy.allowedSkillsJson.map((item) => String(item))
         : [],

@@ -27,17 +27,13 @@ import {
   PiMonoExecutionResult,
   PiMonoSessionSnapshot,
   ProjectContextBundle,
-  RuntimeContextBinding,
   RuntimeEvent,
   RuntimeEventType,
-  RuntimeMinimalContext,
-  RuntimeQueueItemSnapshot,
-  RuntimeQueueMode,
   RuntimeResumeInput,
-  RuntimeStateSnapshot,
   RuntimeSubmitMessageInput,
   RuntimeSubmitResult,
 } from './agent.types';
+import { SessionContext, RuntimeState, SessionEnvironment } from './session-context.types';
 import { MANAGER_INTERACTIVE_DECISION_SCHEMA } from './agent.schemas';
 import { resolveBundledPiSkillsDir } from './pi-skill-mapping';
 
@@ -52,27 +48,15 @@ type SessionRuntimeState = {
   lastAssistantText?: string;
   activeExecution?: ActiveExecutionState;
   currentProjectContextBundle?: ProjectContextBundle;
-  currentContextBinding?: RuntimeContextBinding;
-  currentMinimalContext?: RuntimeMinimalContext;
   currentRoleProfile?: CompiledRoleProfile;
   runtimeTaskSnapshots: GroupRuntimeTaskSnapshot[];
   pendingRuntimeTaskEvents: Array<{ type: RuntimeEventType; payload: Record<string, unknown> }>;
-  queue: RuntimeQueuedMessage[];
   currentTurn?: RuntimeTurnState;
   waitingReason?: string;
   waitingTaskId?: string;
   eventSequence: number;
   recentEvents: RuntimeEvent[];
-  actorQueue: Promise<unknown>;
   toolCache: Map<string, unknown>;
-};
-
-type RuntimeQueuedMessage = {
-  queueItemId: string;
-  mode: RuntimeQueueMode;
-  summary: string;
-  enqueuedAt: string;
-  envelopes: RuntimeSubmitMessageInput['envelope'][];
 };
 
 type RuntimeTurnState = {
@@ -1950,16 +1934,7 @@ export class PiMonoAdapter {
     };
   }
 
-  private async enqueueRuntimeActor<T>(state: SessionRuntimeState, operation: () => Promise<T>): Promise<T> {
-    const next = state.actorQueue.then(operation);
-    state.actorQueue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
-
-  private async hydrateRuntimeState(state: SessionRuntimeState, contextBinding: RuntimeContextBinding) {
+  private async hydrateRuntimeState(state: SessionRuntimeState) {
     if (state.eventSequence === 0) {
       const persistedEvents = await (this.prisma as any).runtimeEvent.findMany({
         where: { runtimeSessionKey: state.runtimeSessionKey },
