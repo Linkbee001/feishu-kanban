@@ -16,6 +16,7 @@ import { GroupRuntimeService } from './group-runtime.service';
 import { GroupRuntimeTaskService } from './group-runtime-task.service';
 import { RoleProfileService } from './role-profile.service';
 import { GroupRuntimeController } from './group-runtime.controller';
+import { SessionStateService } from './session-state.service';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { GroupRuntimeController } from './group-runtime.controller';
     GroupRuntimeService,
     GroupRuntimeTaskService,
     RoleProfileService,
+    SessionStateService,
     {
       provide: GROUP_AGENT_SESSION_REDIS,
       inject: [ConfigService],
@@ -47,6 +49,7 @@ import { GroupRuntimeController } from './group-runtime.controller';
     GroupRuntimeService,
     GroupRuntimeTaskService,
     RoleProfileService,
+    SessionStateService,
   ],
 })
 export class AgentModule {}
