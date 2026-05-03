@@ -13,7 +13,6 @@ import { RepoModule } from '../repo/repo.module';
 import { FeishuModule } from '../feishu/feishu.module';
 import { ConfirmationModule } from '../confirmation/confirmation.module';
 import { GroupRuntimeService } from './group-runtime.service';
-import { GroupRuntimeTaskService } from './group-runtime-task.service';
 import { RoleProfileService } from './role-profile.service';
 import { GroupRuntimeController } from './group-runtime.controller';
 import { SessionStateService } from './session-state.service';
@@ -32,7 +31,6 @@ import { SessionStateService } from './session-state.service';
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
-    GroupRuntimeTaskService,
     RoleProfileService,
     SessionStateService,
     {
@@ -47,7 +45,6 @@ import { SessionStateService } from './session-state.service';
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
-    GroupRuntimeTaskService,
     RoleProfileService,
     SessionStateService,
   ],

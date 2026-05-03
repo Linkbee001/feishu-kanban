@@ -136,7 +136,6 @@ export class GroupRuntimeService {
         text: input.eventText,
         payload: {
           confirmationId: id,
-          taskId: confirmation.groupRuntimeTaskId,
           messageSourceId: confirmation.messageSourceId,
           decidedStatus: confirmation.status,
         },

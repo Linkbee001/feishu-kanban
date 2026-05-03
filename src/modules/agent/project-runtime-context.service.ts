@@ -6,7 +6,6 @@ import {
   FeishuDocumentSnapshot,
   FeishuFolderEntrySnapshot,
   GroupPolicySnapshot,
-  GroupRuntimeTaskSnapshot,
   ProjectContextBundle,
   ProjectResourceSummary,
   ProjectMemberProfileSnapshot,
@@ -28,7 +27,7 @@ export class ProjectRuntimeContextService {
     sessionStatus: 'idle' | 'busy' | 'error' | 'disabled';
     memorySummary?: string | null;
   }): Promise<ProjectContextBundle> {
-    const [project, environment, recentMessages, recentRuns, recentArtifacts, recentTasks, policy, memberProfiles] = await Promise.all([
+    const [project, environment, recentMessages, recentRuns, recentArtifacts, policy, memberProfiles] = await Promise.all([
       this.prisma.project.findUniqueOrThrow({
         where: { id: input.projectId },
       }),
@@ -38,7 +37,6 @@ export class ProjectRuntimeContextService {
       this.getRecentMessages({ projectId: input.projectId, limit: 30 }),
       this.getRecentRuns({ projectId: input.projectId, limit: 12 }),
       this.getRecentArtifacts({ projectId: input.projectId, limit: 20 }),
-      this.getRuntimeTasks({ projectId: input.projectId, limit: 20 }),
       this.getGroupPolicy({ projectId: input.projectId, feishuChatId: projectChatIdFilter(input.runtimeSessionKey) }),
       this.listMemberProfiles({
         projectId: input.projectId,
@@ -107,35 +105,6 @@ export class ProjectRuntimeContextService {
       recentMessages,
       recentRuns,
       recentArtifacts,
-      runtimeTasksSummary: {
-        queued: recentTasks.filter((task) => task.status === 'queued').length,
-        running: recentTasks.filter((task) => task.status === 'running').length,
-        blocked: recentTasks.filter((task) => task.status === 'blocked').length,
-        waitingConfirmation: recentTasks.filter((task) => task.status === 'waiting_confirmation').length,
-        completed: recentTasks.filter((task) => task.status === 'completed').length,
-        failed: recentTasks.filter((task) => task.status === 'failed').length,
-        canceled: recentTasks.filter((task) => task.status === 'canceled').length,
-        recent: recentTasks.map((task) => ({
-          id: task.id,
-          title: task.title,
-          description: task.description,
-          intent: task.intent,
-          skillHint: task.skillHint,
-          outputMode: task.outputMode,
-          orderIndex: task.orderIndex,
-          status: task.status,
-          blockedReason: task.blockedReason,
-          nextActionHint: task.nextActionHint,
-          priority: task.priority,
-          triggerType: task.triggerType,
-          taskPayloadJson:
-            task.taskPayloadJson && typeof task.taskPayloadJson === 'object' && !Array.isArray(task.taskPayloadJson)
-              ? (task.taskPayloadJson as Record<string, unknown>)
-              : null,
-          resultSummary: task.resultSummary,
-          lastError: task.lastError,
-        })),
-      },
       workspaceDocsSummary: docSnapshots.map((doc) => ({
         title: doc.title,
         token: doc.token,
@@ -200,37 +169,6 @@ export class ProjectRuntimeContextService {
       status: artifact.status,
       createdAt: artifact.createdAt.toISOString(),
       feishuUrl: artifact.feishuUrl,
-    }));
-  }
-
-  async getRuntimeTasks(input: { sessionId?: string; projectId?: string; limit?: number }): Promise<GroupRuntimeTaskSnapshot[]> {
-    const tasks = await this.prisma.groupRuntimeTask.findMany({
-      where: {
-        ...(input.sessionId ? { groupSessionId: input.sessionId } : {}),
-        ...(input.projectId ? { projectId: input.projectId } : {}),
-      },
-      orderBy: [{ updatedAt: 'desc' }, { orderIndex: 'asc' }],
-      take: input.limit ?? 20,
-    });
-    return tasks.map((task) => ({
-      id: task.id,
-      title: task.title,
-      description: task.description,
-      intent: task.intent,
-      skillHint: task.skillHint,
-      outputMode: task.outputMode,
-      orderIndex: task.orderIndex,
-      status: task.status,
-      blockedReason: task.blockedReason,
-      nextActionHint: task.nextActionHint,
-      priority: task.priority,
-      triggerType: task.triggerType,
-      taskPayloadJson:
-        task.taskPayloadJson && typeof task.taskPayloadJson === 'object' && !Array.isArray(task.taskPayloadJson)
-          ? (task.taskPayloadJson as Record<string, unknown>)
-          : null,
-      resultSummary: task.resultSummary,
-      lastError: task.lastError,
     }));
   }
 

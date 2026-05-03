@@ -25,7 +25,6 @@ export class AdminService {
       },
       orderBy: { updatedAt: 'desc' },
     });
-    const taskCounts = await this.collectTaskCounts(sessions.map((session) => session.id));
     const recentRuns = await this.prisma.agentRun.findMany({
       where: {
         projectId: {
@@ -54,7 +53,6 @@ export class AdminService {
     });
 
     return sessions.map((session) => {
-      const counts = taskCounts.get(session.id) ?? emptyCounts();
       const recentRun = recentRuns.find((run) => run.projectId === session.projectId);
       const recentArtifact = recentArtifacts.find((artifact) => artifact.projectId === session.projectId);
       const policy = policies.find((item) => item.feishuChatId === session.feishuChatId) ?? null;
@@ -76,7 +74,7 @@ export class AdminService {
         recentSkill: recentRun?.skillName ?? recentRun?.intent ?? null,
         recentRunType: (recentRun as any)?.runType ?? null,
         recentArtifactSummary: recentArtifact ? `${recentArtifact.type}:${recentArtifact.title}` : null,
-        taskCounts: counts,
+        taskCounts: { queued: 0, running: 0, blocked: 0, waitingConfirmation: 0, completed: 0, failed: 0, canceled: 0 },
         policy: this.policies.toSnapshot(policy),
         repoCapability: session.activeEnvironment ? this.repoSync.getCapabilitySnapshot(session.activeEnvironment) : null,
       };
@@ -99,7 +97,6 @@ export class AdminService {
     if (!session) {
       throw new NotFoundException('Robot instance not found');
     }
-    const counts = (await this.collectTaskCounts([session.id])).get(session.id) ?? emptyCounts();
     const policy = await this.policies.findByChat(chatId);
     const recentRun = await this.prisma.agentRun.findFirst({
       where: { projectId: session.projectId ?? undefined },
@@ -128,7 +125,7 @@ export class AdminService {
       recentSkill: recentRun?.skillName ?? recentRun?.intent ?? null,
       recentRunType: (recentRun as any)?.runType ?? null,
       recentArtifactSummary: recentArtifact ? `${recentArtifact.type}:${recentArtifact.title}` : null,
-      taskCounts: counts,
+      taskCounts: { queued: 0, running: 0, blocked: 0, waitingConfirmation: 0, completed: 0, failed: 0, canceled: 0 },
       policy: this.policies.toSnapshot(policy),
       repoCapability: session.activeEnvironment ? this.repoSync.getCapabilitySnapshot(session.activeEnvironment) : null,
     };
@@ -247,38 +244,6 @@ export class AdminService {
   async updatePolicy(chatId: string, body: any) {
     const updated = await this.policies.updateByChat(chatId, body ?? {});
     return this.policies.toSnapshot(updated);
-  }
-
-  private async collectTaskCounts(sessionIds: string[]) {
-    if (!sessionIds.length) {
-      return new Map<string, ReturnType<typeof emptyCounts>>();
-    }
-    const tasks = await this.prisma.groupRuntimeTask.findMany({
-      where: {
-        groupSessionId: { in: sessionIds },
-      },
-      select: {
-        groupSessionId: true,
-        status: true,
-      },
-    });
-
-    const result = new Map<string, ReturnType<typeof emptyCounts>>();
-    for (const sessionId of sessionIds) {
-      result.set(sessionId, emptyCounts());
-    }
-    for (const task of tasks) {
-      const counts = result.get(task.groupSessionId) ?? emptyCounts();
-      if (task.status === 'queued') counts.queued += 1;
-      if (task.status === 'running') counts.running += 1;
-      if (task.status === 'blocked') counts.blocked += 1;
-      if (task.status === 'waiting_confirmation') counts.waitingConfirmation += 1;
-      if (task.status === 'completed') counts.completed += 1;
-      if (task.status === 'failed') counts.failed += 1;
-      if (task.status === 'canceled') counts.canceled += 1;
-      result.set(task.groupSessionId, counts);
-    }
-    return result;
   }
 
   private runtimeStateFromJson(value: unknown) {

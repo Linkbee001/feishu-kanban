@@ -101,16 +101,6 @@ enum GroupSessionStatus {
   disabled
 }
 
-enum GroupRuntimeTaskStatus {
-  queued
-  running
-  blocked
-  waiting_confirmation
-  completed
-  failed
-  canceled
-}
-
 enum RuntimeQueueMode {
   steer
   followup
@@ -142,7 +132,6 @@ model Project {
   artifacts            Artifact[]
   confirmations        ConfirmationRequest[]
   groupAgentSessions   GroupAgentSession[]
-  runtimeTasks         GroupRuntimeTask[]
   groupPolicies        GroupPolicy[]
   memberProfiles       ProjectMemberProfile[]
   runtimeEvents        RuntimeEvent[]
@@ -181,7 +170,6 @@ model ProjectEnvironment {
   artifacts      Artifact[]
   confirmations  ConfirmationRequest[]
   groupAgentSessions GroupAgentSession[] @relation("GroupSessionEnvironment")
-  runtimeTasks   GroupRuntimeTask[]
   groupPolicies  GroupPolicy[]
   runtimeEvents  RuntimeEvent[]
 
@@ -209,7 +197,6 @@ model MessageSource {
   agentRuns       AgentRun[]
   artifacts       Artifact[]
   confirmations   ConfirmationRequest[]
-  groupRuntimeTasks GroupRuntimeTask[]
 
   @@unique([feishuMessageId, senderOpenId])
   @@index([feishuEventId])
@@ -221,7 +208,6 @@ model AgentRun {
   projectId       String              @map("project_id") @db.Uuid
   environmentId   String              @map("environment_id") @db.Uuid
   messageSourceId String?             @map("message_source_id") @db.Uuid
-  groupRuntimeTaskId String?          @map("group_runtime_task_id") @db.Uuid
   piMonoRunId     String?             @map("pi_mono_run_id")
   runType         AgentRunType        @default(formal_execution) @map("run_type")
   intent          String
@@ -239,7 +225,6 @@ model AgentRun {
   project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   environment     ProjectEnvironment  @relation(fields: [environmentId], references: [id])
   messageSource   MessageSource?      @relation(fields: [messageSourceId], references: [id], onDelete: SetNull)
-  groupRuntimeTask GroupRuntimeTask?  @relation(fields: [groupRuntimeTaskId], references: [id], onDelete: SetNull)
   artifacts       Artifact[]
   currentInGroupSessions GroupAgentSession[] @relation("CurrentGroupRun")
 
@@ -253,7 +238,6 @@ model Artifact {
   projectId       String              @map("project_id") @db.Uuid
   environmentId   String?             @map("environment_id") @db.Uuid
   agentRunId      String?             @map("agent_run_id") @db.Uuid
-  groupRuntimeTaskId String?          @map("group_runtime_task_id") @db.Uuid
   messageSourceId String?             @map("message_source_id") @db.Uuid
   type            ArtifactType
   title           String
@@ -268,7 +252,6 @@ model Artifact {
   project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   environment     ProjectEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
   agentRun        AgentRun?           @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
-  groupRuntimeTask GroupRuntimeTask?  @relation(fields: [groupRuntimeTaskId], references: [id], onDelete: SetNull)
   messageSource   MessageSource?      @relation(fields: [messageSourceId], references: [id], onDelete: SetNull)
 
   @@unique([projectId, type, contentHash])
@@ -281,7 +264,6 @@ model ConfirmationRequest {
   projectId       String?             @map("project_id") @db.Uuid
   environmentId   String?             @map("environment_id") @db.Uuid
   messageSourceId String              @map("message_source_id") @db.Uuid
-  groupRuntimeTaskId String?          @map("group_runtime_task_id") @db.Uuid
   actionType      String              @map("action_type")
   payload         Json
   status          ConfirmationStatus  @default(pending)
@@ -291,7 +273,6 @@ model ConfirmationRequest {
   decidedAt       DateTime?           @map("decided_at")
   project         Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   environment     ProjectEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
-  groupRuntimeTask GroupRuntimeTask?  @relation(fields: [groupRuntimeTaskId], references: [id], onDelete: SetNull)
   messageSource   MessageSource       @relation(fields: [messageSourceId], references: [id], onDelete: Cascade)
 
   @@index([status, expiresAt])
@@ -327,7 +308,6 @@ model GroupAgentSession {
   sessionStoreDriver  String?            @map("session_store_driver")
   sessionStoreRef     String?            @map("session_store_ref")
   currentAgentRunId   String?            @unique @map("current_agent_run_id") @db.Uuid
-  currentRuntimeTaskId String?           @unique @map("current_runtime_task_id") @db.Uuid
   activeLockToken     String?            @map("active_lock_token")
   memorySummary       String?            @map("memory_summary")
   sessionState        Json               @default("{}") @map("session_state")
@@ -346,8 +326,6 @@ model GroupAgentSession {
   project             Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
   activeEnvironment   ProjectEnvironment? @relation("GroupSessionEnvironment", fields: [activeEnvironmentId], references: [id], onDelete: SetNull)
   currentAgentRun     AgentRun?          @relation("CurrentGroupRun", fields: [currentAgentRunId], references: [id], onDelete: SetNull)
-  currentRuntimeTask  GroupRuntimeTask?  @relation("CurrentRuntimeTask", fields: [currentRuntimeTaskId], references: [id], onDelete: SetNull)
-  runtimeTasks        GroupRuntimeTask[]
   runtimeEvents       RuntimeEvent[]
 
   @@unique([projectId, agentRole])
@@ -363,44 +341,6 @@ model FeishuEventDedup {
   traceId   String   @map("trace_id")
 
   @@map("feishu_event_dedup")
-}
-
-model GroupRuntimeTask {
-  id                    String                 @id @default(uuid()) @db.Uuid
-  groupSessionId        String                 @map("group_session_id") @db.Uuid
-  projectId             String                 @map("project_id") @db.Uuid
-  environmentId         String                 @map("environment_id") @db.Uuid
-  messageSourceId       String?                @map("message_source_id") @db.Uuid
-  title                 String
-  description           String?
-  intent                String
-  skillHint             String?                @map("skill_hint")
-  outputMode            String?                @map("output_mode")
-  orderIndex            Int                    @default(0) @map("order_index")
-  status                GroupRuntimeTaskStatus @default(queued)
-  blockedReason         String?                @map("blocked_reason")
-  nextActionHint        String?                @map("next_action_hint")
-  priority              Int                    @default(0)
-  triggerType           String?                @map("trigger_type")
-  taskPayloadJson       Json                   @default("{}") @map("task_payload_json")
-  resultSummary         String?                @map("result_summary")
-  lastError             String?                @map("last_error")
-  startedAt             DateTime?              @map("started_at")
-  finishedAt            DateTime?              @map("finished_at")
-  createdAt             DateTime               @default(now()) @map("created_at")
-  updatedAt             DateTime               @updatedAt @map("updated_at")
-  groupSession          GroupAgentSession      @relation(fields: [groupSessionId], references: [id], onDelete: Cascade)
-  project               Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  environment           ProjectEnvironment     @relation(fields: [environmentId], references: [id])
-  messageSource         MessageSource?         @relation(fields: [messageSourceId], references: [id], onDelete: SetNull)
-  confirmationRequests  ConfirmationRequest[]
-  agentRuns             AgentRun[]
-  artifacts             Artifact[]
-  currentInGroupSessions GroupAgentSession[]   @relation("CurrentRuntimeTask")
-
-  @@index([groupSessionId, orderIndex, createdAt])
-  @@index([projectId, status])
-  @@map("group_runtime_tasks")
 }
 
 model GroupPolicy {

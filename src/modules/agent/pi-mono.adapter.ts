@@ -2121,47 +2121,7 @@ export class PiMonoAdapter {
       state.eventSequence = persistedEvents[persistedEvents.length - 1]?.sequence ?? 0;
     }
 
-    if (!state.runtimeTaskSnapshots.length && state.currentContext?.groupSessionId) {
-      const tasks = await this.prisma.groupRuntimeTask.findMany({
-        where: {
-          groupSessionId: state.currentContext.groupSessionId,
-          status: {
-            in: ['queued', 'running', 'blocked', 'waiting_confirmation'],
-          },
-        },
-        orderBy: [{ orderIndex: 'asc' }, { createdAt: 'asc' }],
-      });
-      state.runtimeTaskSnapshots = tasks.map((task) => ({
-        id: task.id,
-        runtimeRef: this.extractRuntimeTaskRef(
-          task.taskPayloadJson && typeof task.taskPayloadJson === 'object' && !Array.isArray(task.taskPayloadJson)
-            ? (task.taskPayloadJson as Record<string, unknown>)
-            : null,
-        ),
-        title: task.title,
-        description: task.description,
-        intent: task.intent,
-        skillHint: task.skillHint,
-        outputMode: task.outputMode,
-        orderIndex: task.orderIndex,
-        status: task.status,
-        blockedReason: task.blockedReason,
-        nextActionHint: task.nextActionHint,
-        priority: task.priority,
-        triggerType: task.triggerType,
-        taskPayloadJson:
-          task.taskPayloadJson && typeof task.taskPayloadJson === 'object' && !Array.isArray(task.taskPayloadJson)
-            ? (task.taskPayloadJson as Record<string, unknown>)
-            : null,
-        resultSummary: task.resultSummary,
-        lastError: task.lastError,
-      }));
-      const waiting = state.runtimeTaskSnapshots.find((task) => task.status === 'waiting_confirmation');
-      if (waiting) {
-        state.waitingTaskId = waiting.id;
-        state.waitingReason = waiting.blockedReason ?? waiting.resultSummary ?? 'Waiting for confirmation';
-      }
-    }
+    // In-memory runtime task snapshots are initialized empty - tasks are created via todo_write tool
   }
 
   private async handleStreamingSubmission(
@@ -2594,7 +2554,6 @@ export class PiMonoAdapter {
         projectId: binding?.projectId,
         environmentId: binding?.environmentId,
         messageSourceId,
-        groupRuntimeTaskId: typeof payload.taskId === 'string' ? payload.taskId : null,
         actionType: typeof payload.actionType === 'string' ? payload.actionType : 'runtime_confirmation',
         payload: (payload.payload ?? {}) as any,
         expiresAt,
@@ -2685,7 +2644,6 @@ export class PiMonoAdapter {
         environmentId: binding.environmentId,
         messageSourceId:
           typeof payload.messageSourceId === 'string' ? payload.messageSourceId : null,
-        groupRuntimeTaskId: taskId,
         runType: 'runtime_audit' as AgentRunType,
         intent: task?.intent ?? 'requirement_analysis',
         skillName: task?.skillHint ?? null,

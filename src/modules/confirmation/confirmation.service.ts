@@ -24,7 +24,6 @@ export class ConfirmationService {
     projectId?: string;
     environmentId?: string;
     messageSourceId: string;
-    groupRuntimeTaskId?: string;
     actionType: string;
     payload: unknown;
     chatId: string;
@@ -38,7 +37,6 @@ export class ConfirmationService {
         projectId: input.projectId,
         environmentId: input.environmentId,
         messageSourceId: input.messageSourceId,
-        groupRuntimeTaskId: input.groupRuntimeTaskId,
         actionType: input.actionType,
         payload: input.payload as any,
         expiresAt,
@@ -77,13 +75,7 @@ export class ConfirmationService {
 
     if (confirmation.projectId && confirmation.environmentId) {
       const payload = confirmation.payload as unknown as ManagerConfirmationPayload;
-      if (confirmation.groupRuntimeTaskId) {
-        await this.groupRuntime.resumeFromConfirmation(id, {
-          confirmationId: id,
-          taskId: confirmation.groupRuntimeTaskId,
-          eventText: `Confirmation accepted for task ${confirmation.groupRuntimeTaskId}. Continue with the blocked task.`,
-        });
-      } else if (confirmation.messageSource.sourceType === 'group') {
+      if (confirmation.messageSource.sourceType === 'group') {
         const session = await this.groupSessions.getOrCreateSession(confirmation.messageSource.feishuChatId, {
           projectId: confirmation.projectId,
           environmentId: confirmation.environmentId,
@@ -126,13 +118,6 @@ export class ConfirmationService {
         decidedAt: new Date(),
       },
     });
-    if (confirmation.groupRuntimeTaskId) {
-      await this.groupRuntime.resumeFromConfirmation(id, {
-        confirmationId: id,
-        taskId: confirmation.groupRuntimeTaskId,
-        eventText: `Confirmation rejected for task ${confirmation.groupRuntimeTaskId}. Mark the task as canceled or revise it before continuing.`,
-      });
-    }
     return updated;
   }
 

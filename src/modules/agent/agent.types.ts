@@ -205,16 +205,6 @@ export interface ProjectContextBundle {
     createdAt: string;
     feishuUrl?: string | null;
   }>;
-  runtimeTasksSummary: {
-    queued: number;
-    running: number;
-    blocked: number;
-    waitingConfirmation: number;
-    completed: number;
-    failed: number;
-    canceled: number;
-    recent: GroupRuntimeTaskSnapshot[];
-  };
   workspaceDocsSummary: Array<{
     title: string;
     token: string;

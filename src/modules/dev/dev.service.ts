@@ -288,12 +288,6 @@ export class DevService {
       take: limitConfirmations,
     });
 
-    const runtimeTasks = await this.prisma.groupRuntimeTask.findMany({
-      where: projectId ? { projectId } : undefined,
-      orderBy: [{ updatedAt: 'desc' }, { orderIndex: 'asc' }],
-      take: limitRuns,
-    });
-
     const counts = {
       sessions: activeSessions.length,
       disabledSessions: disabledSessions.length,
@@ -305,8 +299,6 @@ export class DevService {
       syncedArtifacts: artifacts.filter((artifact) => artifact.status === 'synced').length,
       failedArtifacts: artifacts.filter((artifact) => artifact.status === 'failed').length,
       activeSessionRuns: activeSessions.filter((session) => Boolean(session.currentAgentRunId)).length,
-      runtimeTasks: runtimeTasks.length,
-      waitingRuntimeTasks: runtimeTasks.filter((task) => task.status === 'waiting_confirmation').length,
     };
 
     return {
@@ -325,7 +317,6 @@ export class DevService {
         ...session,
         lock: null,
       })),
-      runtimeTasks,
       runs,
       artifacts,
       messages,
