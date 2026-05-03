@@ -34,6 +34,14 @@ import {
   RuntimeSubmitResult,
 } from './agent.types';
 import { SessionContext, RuntimeState, SessionEnvironment } from './session-context.types';
+
+// Simplified context binding type (replaces RuntimeContextBinding)
+type SimplifiedContextBinding = {
+  projectId: string;
+  environmentId: string;
+  feishuChatId: string;
+  groupSessionId?: string | null;
+};
 import { MANAGER_INTERACTIVE_DECISION_SCHEMA } from './agent.schemas';
 import { resolveBundledPiSkillsDir } from './pi-skill-mapping';
 
@@ -57,6 +65,16 @@ type SessionRuntimeState = {
   eventSequence: number;
   recentEvents: RuntimeEvent[];
   toolCache: Map<string, unknown>;
+  // Memory queues (not persisted - acceptable trade-off)
+  confirmationQueue?: RuntimeSubmitMessageInput['envelope'][];
+  turnQueue?: RuntimeSubmitMessageInput['envelope'][];
+  // Simplified context binding (replaces RuntimeContextBinding)
+  currentContext?: {
+    projectId: string;
+    environmentId: string;
+    feishuChatId: string;
+    groupSessionId?: string | null;
+  };
 };
 
 type RuntimeTurnState = {
@@ -263,7 +281,6 @@ export class PiMonoAdapter {
     sessionStoreRef?: string | null;
     sessionMode?: 'bootstrap' | 'active' | 'disabled';
     projectContextBundle?: PiMonoCreateRunRequest['projectContextBundle'];
-    minimalContext?: RuntimeMinimalContext;
     runtimeTasks?: GroupRuntimeTaskSnapshot[];
     roleProfile?: CompiledRoleProfile;
     project: PiMonoCreateRunRequest['project'];
@@ -283,7 +300,6 @@ export class PiMonoAdapter {
         requestKind: 'group_runtime',
         wakeMode: 'interactive',
         projectContextBundle: input.projectContextBundle,
-        minimalContext: input.minimalContext,
         runtimeTasks: input.runtimeTasks ?? [],
         roleProfile: input.roleProfile,
         project: input.project,
@@ -352,96 +368,95 @@ export class PiMonoAdapter {
       projectPath: input.environment.projectPath,
       roleProfile: input.roleProfile,
     });
-    const result = await this.enqueueRuntimeActor(state, async () => {
-      this.logger.log(
-        `runtime submit: session=${state.runtimeSessionKey} source=${input.envelope.messageSourceId} mode=${input.queueMode ?? 'collect'}`,
-      );
-      await this.hydrateRuntimeState(state, input.contextBinding);
-      state.currentContextBinding = input.contextBinding;
-      state.currentMinimalContext = input.minimalContext;
-      state.currentRoleProfile = input.roleProfile;
 
-      const envelope = input.envelope;
-      await this.recordRuntimeEvent(state, 'message_submitted', {
-        messageSourceId: envelope.messageSourceId,
-        sourceType: envelope.sourceType,
-        rawText: envelope.rawText,
-        queueMode: input.queueMode ?? 'collect',
-      });
+    this.logger.log(
+      `runtime submit: session=${state.runtimeSessionKey} source=${input.envelope.messageSourceId}`,
+    );
+    await this.hydrateRuntimeState(state);
+    state.currentRoleProfile = input.roleProfile;
 
-      this.logger.log(
-        `[SUBMIT CHECK] activeExecution=${state.activeExecution?.mode} isStreaming=${state.session.isStreaming} waitingReason=${state.waitingReason ?? 'none'} currentTurn=${state.currentTurn?.turnId ?? 'none'}`,
-      );
+    const envelope = input.envelope;
+    await this.recordRuntimeEvent(state, 'message_submitted', {
+      messageSourceId: envelope.messageSourceId,
+      sourceType: envelope.sourceType,
+      rawText: envelope.rawText,
+    });
 
-      if (state.activeExecution?.mode === 'group_runtime' && state.session.isStreaming) {
-        this.logger.log(`[SUBMIT] branch: handleStreamingSubmission`);
-        return this.handleStreamingSubmission(state, input);
+    this.logger.log(
+      `[SUBMIT CHECK] activeExecution=${state.activeExecution?.mode} isStreaming=${state.session.isStreaming} waitingReason=${state.waitingReason ?? 'none'} currentTurn=${state.currentTurn?.turnId ?? 'none'}`,
+    );
+
+    if (state.activeExecution?.mode === 'group_runtime' && state.session.isStreaming) {
+      this.logger.log(`[SUBMIT] branch: handleStreamingSubmission`);
+      return this.handleStreamingSubmission(state, input);
+    }
+
+    if (state.waitingReason) {
+      this.logger.log(`[SUBMIT] branch: waitingReason=${state.waitingReason}`);
+      // Messages during waiting are queued in memory (not persisted)
+      if (!state.confirmationQueue) {
+        state.confirmationQueue = [];
       }
-
-      if (state.waitingReason) {
-        this.logger.log(`[SUBMIT] branch: waitingReason=${state.waitingReason}`);
-        const queued = this.enqueueRuntimeMessage(state, input.queueMode ?? 'collect', envelope);
-        await this.recordRuntimeEvent(state, queued.type, queued.payload);
-        return {
-          accepted: true,
-          action: queued.type === 'message_collected' ? 'collected' : 'queued',
-          runtimeSessionKey: state.runtimeSessionKey,
-          activeTurnId: state.currentTurn?.turnId,
-        } satisfies RuntimeSubmitResult;
-      }
-
-      if (state.currentTurn) {
-        this.logger.log(`[SUBMIT] branch: currentTurn exists`);
-        const queued = this.enqueueRuntimeMessage(state, input.queueMode ?? 'collect', envelope);
-        await this.recordRuntimeEvent(state, queued.type, queued.payload);
-        return {
-          accepted: true,
-          action: queued.type === 'message_collected' ? 'collected' : 'queued',
-          runtimeSessionKey: state.runtimeSessionKey,
-          activeTurnId: state.currentTurn?.turnId,
-        } satisfies RuntimeSubmitResult;
-      }
-
-      this.logger.log(`[SUBMIT] branch: creating new turn`);
-
-      const turnId = randomUUID();
-      state.currentTurn = {
-        turnId,
-        startedAt: new Date().toISOString(),
-        mode: 'group_runtime',
-        messageSourceId: envelope.messageSourceId,
-      };
-      this.logger.log(
-        `[RUNTIME TURN] scheduling turn execution: session=${state.runtimeSessionKey} turnId=${turnId}`,
-      );
-      void this.runRuntimeTurn({
-        state,
-        project: input.project,
-        environment: input.environment,
-        roleProfile: input.roleProfile,
-        minimalContext: input.minimalContext,
-        queueMode: input.queueMode ?? 'collect',
-        reasonText: envelope.rawText,
-        source: {
-          messageSourceId: envelope.messageSourceId,
-          feishuMessageId: envelope.feishuMessageId,
-          senderOpenId: envelope.senderOpenId,
-          traceId: envelope.traceId,
-        },
-      }).catch((error) => {
-        this.logger.error(
-          `[RUNTIME TURN] unhandled error in fire-and-forget turn: session=${state.runtimeSessionKey} turnId=${turnId} error=${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-
+      state.confirmationQueue.push(envelope);
       return {
         accepted: true,
-        action: 'run_now',
+        action: 'queued',
         runtimeSessionKey: state.runtimeSessionKey,
-        activeTurnId: turnId,
+        activeTurnId: state.currentTurn?.turnId,
       } satisfies RuntimeSubmitResult;
+    }
+
+    if (state.currentTurn) {
+      this.logger.log(`[SUBMIT] branch: currentTurn exists`);
+      // Queue for existing turn
+      if (!state.turnQueue) {
+        state.turnQueue = [];
+      }
+      state.turnQueue.push(envelope);
+      return {
+        accepted: true,
+        action: 'queued',
+        runtimeSessionKey: state.runtimeSessionKey,
+        activeTurnId: state.currentTurn?.turnId,
+      } satisfies RuntimeSubmitResult;
+    }
+
+    this.logger.log(`[SUBMIT] branch: creating new turn`);
+
+    const turnId = randomUUID();
+    state.currentTurn = {
+      turnId,
+      startedAt: new Date().toISOString(),
+      mode: 'group_runtime',
+      messageSourceId: envelope.messageSourceId,
+    };
+    this.logger.log(
+      `[RUNTIME TURN] scheduling turn execution: session=${state.runtimeSessionKey} turnId=${turnId}`,
+    );
+    void this.runRuntimeTurn({
+      state,
+      project: input.project,
+      environment: input.environment,
+      roleProfile: input.roleProfile,
+      reasonText: envelope.rawText,
+      source: {
+        messageSourceId: envelope.messageSourceId,
+        feishuMessageId: envelope.feishuMessageId,
+        senderOpenId: envelope.senderOpenId,
+        traceId: envelope.traceId,
+      },
+    }).catch((error) => {
+      this.logger.error(
+        `[RUNTIME TURN] unhandled error in fire-and-forget turn: session=${state.runtimeSessionKey} turnId=${turnId} error=${error instanceof Error ? error.message : String(error)}`,
+      );
     });
-    return result;
+
+    return {
+      accepted: true,
+      action: 'run_now',
+      runtimeSessionKey: state.runtimeSessionKey,
+      activeTurnId: turnId,
+    } satisfies RuntimeSubmitResult;
   }
 
   async resumeSession(input: RuntimeResumeInput): Promise<{ accepted: boolean }> {
@@ -452,74 +467,225 @@ export class PiMonoAdapter {
       projectPath: input.environment.projectPath,
       roleProfile: input.roleProfile,
     });
-    return this.enqueueRuntimeActor(state, async () => {
-      await this.hydrateRuntimeState(state, input.contextBinding);
-      state.currentContextBinding = input.contextBinding;
-      state.currentMinimalContext = input.minimalContext;
-      state.currentRoleProfile = input.roleProfile;
-      state.waitingReason = undefined;
-      state.waitingTaskId =
-        typeof input.event.payload.taskId === 'string'
-          ? this.resolveRuntimeTaskId(state, input.event.payload.taskId) ?? state.waitingTaskId
-          : state.waitingTaskId;
-      if (state.waitingTaskId) {
-        this.transitionRuntimeTask(state, {
-          type: 'todo_write',
-          action: 'update',
-          taskId: state.waitingTaskId,
-          resultSummary: `Confirmation resolved via ${input.event.type}.`,
-        });
-        this.transitionRuntimeTask(state, {
-          type: 'todo_write',
-          action: 'start',
-          taskId: state.waitingTaskId,
-        });
-      }
-      await this.recordRuntimeEvent(state, 'session_resumed', {
-        type: input.event.type,
-        payload: input.event.payload,
-        text: input.event.text ?? null,
-      });
 
-      const turnId = randomUUID();
-      state.currentTurn = {
-        turnId,
-        startedAt: new Date().toISOString(),
-        mode: 'group_runtime',
+    await this.hydrateRuntimeState(state);
+    state.currentRoleProfile = input.roleProfile;
+    state.waitingReason = undefined;
+    state.waitingTaskId =
+      typeof input.event.payload.taskId === 'string'
+        ? this.resolveRuntimeTaskId(state, input.event.payload.taskId) ?? state.waitingTaskId
+        : state.waitingTaskId;
+    if (state.waitingTaskId) {
+      this.transitionRuntimeTask(state, {
+        type: 'todo_write',
+        action: 'update',
+        taskId: state.waitingTaskId,
+        resultSummary: `Confirmation resolved via ${input.event.type}.`,
+      });
+      this.transitionRuntimeTask(state, {
+        type: 'todo_write',
+        action: 'start',
+        taskId: state.waitingTaskId,
+      });
+    }
+    await this.recordRuntimeEvent(state, 'session_state_changed', {
+      type: input.event.type,
+      payload: input.event.payload,
+      text: input.event.text ?? null,
+      reason: 'Session resumed',
+    });
+
+    const turnId = randomUUID();
+    state.currentTurn = {
+      turnId,
+      startedAt: new Date().toISOString(),
+      mode: 'group_runtime',
+      messageSourceId:
+        typeof input.event.payload.messageSourceId === 'string'
+          ? input.event.payload.messageSourceId
+          : undefined,
+    };
+    void this.runRuntimeTurn({
+      state,
+      project: input.project,
+      environment: input.environment,
+      roleProfile: input.roleProfile,
+      reasonText:
+        input.event.text ??
+        `Resume the waiting runtime task after ${input.event.type}.`,
+      source: {
         messageSourceId:
           typeof input.event.payload.messageSourceId === 'string'
             ? input.event.payload.messageSourceId
-            : undefined,
-      };
-      void this.runRuntimeTurn({
-        state,
-        project: input.project,
-        environment: input.environment,
-        roleProfile: input.roleProfile,
-        minimalContext: input.minimalContext,
-        queueMode: 'followup',
-        reasonText:
-          input.event.text ??
-          `Resume the waiting runtime task after ${input.event.type}.`,
-        source: {
-          messageSourceId:
-            typeof input.event.payload.messageSourceId === 'string'
-              ? input.event.payload.messageSourceId
-              : null,
-          senderOpenId: null,
-          traceId: null,
-        },
-      });
-      return { accepted: true };
+            : null,
+        senderOpenId: null,
+        traceId: null,
+      },
+    });
+    return { accepted: true };
+  }
+
+  /**
+   * Simplified steer method for appending messages to active sessions or starting new turns.
+   * This is the primary entry point for message submission in the refactored architecture.
+   */
+  async steer(
+    runtimeSessionKey: string,
+    prompt: string,
+    input: {
+      projectId: string;
+      environmentId: string;
+      feishuChatId: string;
+      messageSourceId: string;
+      feishuMessageId?: string | null;
+      senderOpenId?: string | null;
+      traceId?: string | null;
+    },
+    roleProfile?: CompiledRoleProfile,
+  ): Promise<{ action: string; runtimeSessionKey: string; activeTurnId?: string }> {
+    // Look up environment and project from database
+    const environment = await this.prisma.projectEnvironment.findUniqueOrThrow({
+      where: { id: input.environmentId },
+    });
+    const project = await this.prisma.project.findUniqueOrThrow({
+      where: { id: input.projectId },
+    });
+
+    // If roleProfile not provided, use minimal default
+    const profile = roleProfile ?? {
+      agentRole: 'manager' as const,
+      agentsMd: '',
+      soulMd: '',
+      userMd: '',
+      standingOrdersMd: '',
+      promptPreludeMd: '',
+      skills: [],
+      compiledContextFile: '',
+    };
+
+    // Use existing submitMessage logic
+    const result = await this.submitMessage({
+      runtimeSessionKey,
+      project: {
+        id: project.id,
+        name: project.name,
+        feishuChatId: project.feishuChatId,
+      },
+      environment: {
+        id: environment.id,
+        name: environment.name,
+        piMonoEnvId: environment.piMonoEnvId,
+        repoUrl: environment.repoUrl,
+        repoBranch: environment.repoBranch,
+        repoCredentialRef: environment.repoCredentialRef,
+        repoMirrorPath: environment.repoMirrorPath,
+        repoSyncStatus: environment.repoSyncStatus,
+        repoSyncError: environment.repoSyncError,
+        repoHeadRef: environment.repoHeadRef,
+        projectPath: environment.projectPath,
+        modelEndpoint: environment.modelEndpoint,
+        modelName: environment.modelName,
+        skillSet: environment.skillSet,
+      },
+      roleProfile: profile,
+      envelope: {
+        messageSourceId: input.messageSourceId,
+        sourceType: 'group',
+        senderOpenId: input.senderOpenId ?? null,
+        feishuChatId: input.feishuChatId,
+        feishuMessageId: input.feishuMessageId ?? null,
+        traceId: input.traceId ?? null,
+        rawText: prompt,
+      },
+    });
+
+    return {
+      action: result.action,
+      runtimeSessionKey: result.runtimeSessionKey,
+      activeTurnId: result.activeTurnId ?? undefined,
+    };
+  }
+
+  /**
+   * Simplified followUp method for resuming after interruptions (confirmations).
+   * This replaces resumeSession with a cleaner API.
+   */
+  async followUp(
+    runtimeSessionKey: string,
+    event: { type: 'confirmation_resolved' | 'system_followup'; text?: string; payload?: Record<string, unknown> },
+    input: {
+      projectId: string;
+      environmentId: string;
+      feishuChatId: string;
+      messageSourceId?: string | null;
+    },
+    roleProfile?: CompiledRoleProfile,
+  ): Promise<{ accepted: boolean }> {
+    // Look up environment and project from database
+    const environment = await this.prisma.projectEnvironment.findUniqueOrThrow({
+      where: { id: input.environmentId },
+    });
+    const project = await this.prisma.project.findUniqueOrThrow({
+      where: { id: input.projectId },
+    });
+
+    // If roleProfile not provided, use minimal default
+    const profile = roleProfile ?? {
+      agentRole: 'manager' as const,
+      agentsMd: '',
+      soulMd: '',
+      userMd: '',
+      standingOrdersMd: '',
+      promptPreludeMd: '',
+      skills: [],
+      compiledContextFile: '',
+    };
+
+    // Use existing resumeSession logic
+    return this.resumeSession({
+      runtimeSessionKey,
+      project: {
+        id: project.id,
+        name: project.name,
+        feishuChatId: project.feishuChatId,
+      },
+      environment: {
+        id: environment.id,
+        name: environment.name,
+        piMonoEnvId: environment.piMonoEnvId,
+        repoUrl: environment.repoUrl,
+        repoBranch: environment.repoBranch,
+        repoCredentialRef: environment.repoCredentialRef,
+        repoMirrorPath: environment.repoMirrorPath,
+        repoSyncStatus: environment.repoSyncStatus,
+        repoSyncError: environment.repoSyncError,
+        repoHeadRef: environment.repoHeadRef,
+        projectPath: environment.projectPath,
+        modelEndpoint: environment.modelEndpoint,
+        modelName: environment.modelName,
+        skillSet: environment.skillSet,
+      },
+      roleProfile: profile,
+      event: {
+        type: event.type,
+        payload: event.payload ?? {},
+        text: event.text ?? '',
+      },
     });
   }
 
-  getRuntimeState(runtimeSessionKey: string): RuntimeStateSnapshot | null {
+  getRuntimeState(runtimeSessionKey: string): RuntimeState | null {
     const state = this.sessions.get(runtimeSessionKey);
     if (!state) {
       return null;
     }
-    return this.buildRuntimeStateSnapshot(state);
+    if (state.waitingReason) {
+      return 'waiting_confirmation';
+    }
+    if (state.currentTurn || state.activeExecution) {
+      return 'running';
+    }
+    return 'idle';
   }
 
   pullRuntimeEvents(input: {
@@ -555,8 +721,11 @@ export class PiMonoAdapter {
     };
     state.activeExecution = execution;
     state.currentProjectContextBundle = input.payload.projectContextBundle;
-    state.currentContextBinding = input.payload.contextBinding;
-    state.currentMinimalContext = input.payload.minimalContext;
+    state.currentContext = {
+      projectId: input.payload.project.id,
+      environmentId: input.payload.environment.id,
+      feishuChatId: input.payload.project.feishuChatId,
+    };
 
     let cancelWatcher: NodeJS.Timeout | undefined;
     let timeoutHandle: NodeJS.Timeout | undefined;
@@ -635,8 +804,7 @@ export class PiMonoAdapter {
       state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
       state.activeExecution = undefined;
       state.currentProjectContextBundle = undefined;
-      state.currentContextBinding = undefined;
-      state.currentMinimalContext = undefined;
+      state.currentContext = undefined;
     }
   }
 
@@ -660,8 +828,11 @@ export class PiMonoAdapter {
     };
     state.activeExecution = execution;
     state.currentProjectContextBundle = input.payload.projectContextBundle;
-    state.currentContextBinding = input.payload.contextBinding;
-    state.currentMinimalContext = input.payload.minimalContext;
+    state.currentContext = {
+      projectId: input.payload.project.id,
+      environmentId: input.payload.environment.id,
+      feishuChatId: input.payload.project.feishuChatId,
+    };
 
     let timeoutHandle: NodeJS.Timeout | undefined;
 
@@ -721,8 +892,7 @@ export class PiMonoAdapter {
       state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
       state.activeExecution = undefined;
       state.currentProjectContextBundle = undefined;
-      state.currentContextBinding = undefined;
-      state.currentMinimalContext = undefined;
+      state.currentContext = undefined;
     }
   }
 
@@ -748,8 +918,11 @@ export class PiMonoAdapter {
     };
     state.activeExecution = execution;
     state.currentProjectContextBundle = input.payload.projectContextBundle;
-    state.currentContextBinding = input.payload.contextBinding;
-    state.currentMinimalContext = input.payload.minimalContext;
+    state.currentContext = {
+      projectId: input.payload.project.id,
+      environmentId: input.payload.environment.id,
+      feishuChatId: input.payload.project.feishuChatId,
+    };
     state.currentRoleProfile = input.payload.roleProfile;
     if (input.payload.runtimeTasks?.length) {
       state.runtimeTaskSnapshots = input.payload.runtimeTasks;
@@ -837,8 +1010,7 @@ export class PiMonoAdapter {
       state.sessionStoreRef = state.sessionManager.getSessionFile() ?? state.sessionStoreRef;
       state.activeExecution = undefined;
       state.currentProjectContextBundle = undefined;
-      state.currentContextBinding = undefined;
-      state.currentMinimalContext = undefined;
+      state.currentContext = undefined;
       state.currentRoleProfile = undefined;
     }
   }
@@ -922,18 +1094,14 @@ export class PiMonoAdapter {
       lastAssistantText: undefined,
       activeExecution: undefined,
       currentProjectContextBundle: undefined,
-      currentContextBinding: undefined,
-      currentMinimalContext: undefined,
       currentRoleProfile: input.roleProfile,
       runtimeTaskSnapshots: [],
       pendingRuntimeTaskEvents: [],
-      queue: [],
       currentTurn: undefined,
       waitingReason: undefined,
       waitingTaskId: undefined,
       eventSequence: 0,
       recentEvents: [],
-      actorQueue: Promise.resolve(),
       toolCache: new Map<string, unknown>(),
     };
 
@@ -1391,11 +1559,11 @@ export class PiMonoAdapter {
   }
 
   private requireContextBinding(state: SessionRuntimeState) {
-    if (!state.currentContextBinding) {
+    if (!state.currentContext) {
       throw new Error('Feishu project tools require a runtime context binding');
     }
 
-    return state.currentContextBinding;
+    return state.currentContext;
   }
 
   private async getProjectRuntimeResource(state: SessionRuntimeState): Promise<ProjectRuntimeResource> {
@@ -1699,18 +1867,18 @@ export class PiMonoAdapter {
       `Branch: ${payload.environment.repoBranch ?? 'not configured'}`,
       `Repo capability state: ${repoCapabilityState}`,
       `Repo mirror path: ${payload.environment.repoMirrorPath ?? 'not prepared'}`,
-      `Repo sync status: ${payload.minimalContext?.repoReady ? 'ready' : payload.environment.repoSyncStatus ?? 'unknown'}`,
-      `Repo head: ${payload.minimalContext?.repoHeadRef ?? payload.environment.repoHeadRef ?? 'unknown'}`,
+      `Repo sync status: ${payload.environment.repoSyncStatus ?? 'unknown'}`,
+      `Repo head: ${payload.environment.repoHeadRef ?? 'unknown'}`,
       `Intent: ${payload.intent}`,
       groupRuntimeMode ? `Runtime task snapshot count: ${payload.runtimeTasks?.length ?? 0}` : undefined,
-      payload.minimalContext?.sessionMemorySummary
-        ? `Session memory summary: ${payload.minimalContext.sessionMemorySummary}`
+      payload.projectContextBundle?.session?.memorySummary
+        ? `Session memory summary: ${payload.projectContextBundle.session.memorySummary}`
         : 'Session memory summary: none',
       groupRuntimeMode
-        ? `Group policy: mentionOnly=${payload.minimalContext?.groupPolicy?.mentionOnly ?? 'unknown'}, allowDocWrite=${payload.minimalContext?.groupPolicy?.allowDocWrite ?? 'unknown'}, allowTaskBoardWrite=${payload.minimalContext?.groupPolicy?.allowTaskBoardWrite ?? 'unknown'}, highRiskConfirmation=${payload.minimalContext?.groupPolicy?.highRiskActionsRequireConfirmation ?? 'unknown'}`
+        ? `Group policy: mentionOnly=${payload.projectContextBundle?.groupPolicy?.mentionOnly ?? 'unknown'}, allowDocWrite=${payload.projectContextBundle?.groupPolicy?.allowDocWrite ?? 'unknown'}, allowTaskBoardWrite=${payload.projectContextBundle?.groupPolicy?.allowTaskBoardWrite ?? 'unknown'}, highRiskConfirmation=${payload.projectContextBundle?.groupPolicy?.highRiskActionsRequireConfirmation ?? 'unknown'}`
         : undefined,
       groupRuntimeMode
-        ? `Project resources: docFolder=${payload.minimalContext?.resourceSummary?.hasDocFolder ? 'bound' : 'unbound'}, taskBoard=${payload.minimalContext?.resourceSummary?.hasTaskBoard ? 'bound' : 'unbound'}`
+        ? `Project resources: docFolder=${payload.projectContextBundle?.folderEntries?.length ? 'bound' : 'unbound'}, taskBoard=${payload.projectContextBundle?.bitableSnapshot ? 'bound' : 'unbound'}`
         : undefined,
       groupRuntimeMode
         ? `Recent project docs: ${this.describeRecentDocs(payload)}`
@@ -1795,9 +1963,9 @@ export class PiMonoAdapter {
       lines.push('- reply_group is mandatory for every completed turn and should stay concise and user-facing.');
       lines.push(
         `- Respect group policy boundaries: doc writes are ${
-          payload.minimalContext?.groupPolicy?.allowDocWrite === false ? 'disabled' : 'allowed when explicitly requested'
+          payload.projectContextBundle?.groupPolicy?.allowDocWrite === false ? 'disabled' : 'allowed when explicitly requested'
         }, task board writes are ${
-          payload.minimalContext?.groupPolicy?.allowTaskBoardWrite === false ? 'disabled' : 'allowed when explicitly requested'
+          payload.projectContextBundle?.groupPolicy?.allowTaskBoardWrite === false ? 'disabled' : 'allowed when explicitly requested'
         }.`,
       );
       lines.push('- Only durable outputs with explicit persistence intent should be considered for formal sync.');
@@ -1818,7 +1986,7 @@ export class PiMonoAdapter {
     if (!payload.environment.repoUrl?.trim()) {
       return 'repo_unconfigured';
     }
-    if (payload.environment.repoSyncStatus === 'ready' || payload.minimalContext?.repoReady) {
+    if (payload.environment.repoSyncStatus === 'ready') {
       return 'repo_ready';
     }
     if (payload.environment.repoSyncStatus === 'error') {
@@ -1828,7 +1996,7 @@ export class PiMonoAdapter {
   }
 
   private describeRecentDocs(payload: PiMonoCreateRunRequest) {
-    const docs = payload.minimalContext?.resourceSummary?.recentDocs ?? [];
+    const docs = payload.projectContextBundle?.workspaceDocsSummary ?? [];
     if (!docs.length) {
       return 'none';
     }
@@ -1838,15 +2006,15 @@ export class PiMonoAdapter {
   }
 
   private describeTaskBoardSummary(payload: PiMonoCreateRunRequest) {
-    const summary = payload.minimalContext?.resourceSummary?.taskBoardSummary;
-    if (!summary) {
+    const bitableSnapshot = payload.projectContextBundle?.bitableSnapshot;
+    if (!bitableSnapshot) {
       return 'none';
     }
-    return `pending_confirmation=${summary.pendingConfirmation}, blocked=${summary.blocked}, in_progress=${summary.inProgress}`;
+    return `total=${bitableSnapshot.totalTasks}, open=${bitableSnapshot.openTasks}, blocked=${bitableSnapshot.blockedTasks}, overdue=${bitableSnapshot.overdueTasks}`;
   }
 
   private describeRecentArtifacts(payload: PiMonoCreateRunRequest) {
-    const artifacts = payload.minimalContext?.resourceSummary?.recentArtifacts ?? [];
+    const artifacts = payload.projectContextBundle?.recentArtifacts ?? [];
     if (!artifacts.length) {
       return 'none';
     }
@@ -1953,10 +2121,10 @@ export class PiMonoAdapter {
       state.eventSequence = persistedEvents[persistedEvents.length - 1]?.sequence ?? 0;
     }
 
-    if (!state.runtimeTaskSnapshots.length && contextBinding.groupSessionId) {
+    if (!state.runtimeTaskSnapshots.length && state.currentContext?.groupSessionId) {
       const tasks = await this.prisma.groupRuntimeTask.findMany({
         where: {
-          groupSessionId: contextBinding.groupSessionId,
+          groupSessionId: state.currentContext.groupSessionId,
           status: {
             in: ['queued', 'running', 'blocked', 'waiting_confirmation'],
           },
@@ -1996,155 +2164,22 @@ export class PiMonoAdapter {
     }
   }
 
-  private buildRuntimeStateSnapshot(state: SessionRuntimeState): RuntimeStateSnapshot {
-    return {
-      runtimeSessionKey: state.runtimeSessionKey,
-      piSessionId: state.session.sessionId,
-      status: state.waitingReason
-        ? 'waiting_confirmation'
-        : state.activeExecution
-          ? state.activeExecution.canceled
-            ? 'aborting'
-            : 'running'
-          : state.session.isCompacting
-            ? 'compacting'
-            : state.queue.length
-              ? 'queued'
-              : 'idle',
-      currentTurn: state.currentTurn
-        ? {
-            turnId: state.currentTurn.turnId,
-            mode: state.currentTurn.mode,
-            messageSourceId: state.currentTurn.messageSourceId,
-            startedAt: state.currentTurn.startedAt,
-          }
-        : undefined,
-      queue: state.queue.map((item): RuntimeQueueItemSnapshot => ({
-        queueItemId: item.queueItemId,
-        messageSourceId: item.envelopes[0]?.messageSourceId,
-        mode: item.mode,
-        summary: item.summary,
-        enqueuedAt: item.enqueuedAt,
-      })),
-      waitingReason: state.waitingReason,
-      isStreaming: state.session.isStreaming,
-      isCompacting: state.session.isCompacting,
-      memorySummary: this.buildMemorySummary(undefined, state.lastAssistantText),
-    };
-  }
-
   private async handleStreamingSubmission(
     state: SessionRuntimeState,
     input: RuntimeSubmitMessageInput,
   ): Promise<RuntimeSubmitResult> {
-    const queueMode = input.queueMode ?? 'collect';
     const envelope = input.envelope;
 
-    if (queueMode === 'steer' && !state.session.isCompacting) {
+    // Steer the message into the active streaming session
+    if (!state.session.isCompacting) {
       await state.session.steer(envelope.rawText);
-      await this.recordRuntimeEvent(state, 'message_steered', {
-        messageSourceId: envelope.messageSourceId,
-        rawText: envelope.rawText,
-      });
-      return {
-        accepted: true,
-        action: 'steered',
-        runtimeSessionKey: state.runtimeSessionKey,
-        activeTurnId: state.currentTurn?.turnId,
-      };
     }
-
-    if (queueMode === 'interrupt') {
-      const queued = this.enqueueRuntimeMessage(state, 'interrupt', envelope, true);
-      if (state.activeExecution) {
-        state.activeExecution.canceled = true;
-      }
-      await this.recordRuntimeEvent(state, 'message_interrupted', queued.payload);
-      await state.session.abort().catch((error) => {
-        this.logger.warn(
-          `Failed to abort streaming runtime session ${state.runtimeSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-      return {
-        accepted: true,
-        action: 'interrupted',
-        runtimeSessionKey: state.runtimeSessionKey,
-        activeTurnId: state.currentTurn?.turnId,
-      };
-    }
-
-    const queued = this.enqueueRuntimeMessage(state, queueMode, envelope);
-    await this.recordRuntimeEvent(state, queued.type, queued.payload);
     return {
       accepted: true,
-      action: queued.type === 'message_collected' ? 'collected' : 'queued',
+      action: 'steered',
       runtimeSessionKey: state.runtimeSessionKey,
       activeTurnId: state.currentTurn?.turnId,
     };
-  }
-
-  private enqueueRuntimeMessage(
-    state: SessionRuntimeState,
-    mode: RuntimeQueueMode,
-    envelope: RuntimeSubmitMessageInput['envelope'],
-    front = false,
-  ) {
-    if (mode === 'collect') {
-      const candidate = front ? state.queue[0] : state.queue[state.queue.length - 1];
-      if (candidate && candidate.mode === 'collect') {
-        if (front) {
-          candidate.envelopes.unshift(envelope);
-        } else {
-          candidate.envelopes.push(envelope);
-        }
-        candidate.summary = this.summarizeEnvelopes(candidate.envelopes);
-        return {
-          type: 'message_collected' as const,
-          payload: {
-            queueItemId: candidate.queueItemId,
-            messageSourceId: envelope.messageSourceId,
-            mode: candidate.mode,
-            summary: candidate.summary,
-          },
-        };
-      }
-    }
-
-    const item: RuntimeQueuedMessage = {
-      queueItemId: randomUUID(),
-      mode,
-      summary: this.summarizeEnvelopes([envelope]),
-      enqueuedAt: new Date().toISOString(),
-      envelopes: [envelope],
-    };
-    if (front) {
-      state.queue.unshift(item);
-    } else {
-      state.queue.push(item);
-    }
-    const eventType: 'message_collected' | 'message_queued' =
-      mode === 'collect' ? 'message_collected' : 'message_queued';
-    return {
-      type: eventType,
-      payload: {
-        queueItemId: item.queueItemId,
-        messageSourceId: envelope.messageSourceId,
-        mode: item.mode,
-        summary: item.summary,
-      },
-    };
-  }
-
-  private summarizeEnvelopes(envelopes: RuntimeSubmitMessageInput['envelope'][]) {
-    if (envelopes.length === 1) {
-      return envelopes[0].rawText.slice(0, 160);
-    }
-    return `${envelopes.length} queued messages: ${envelopes
-      .map((item) => item.rawText.trim())
-      .filter(Boolean)
-      .slice(0, 3)
-      .join(' | ')}`
-      .slice(0, 200);
   }
 
   private async runRuntimeTurn(input: {
@@ -2152,8 +2187,6 @@ export class PiMonoAdapter {
     project: PiMonoCreateRunRequest['project'];
     environment: PiMonoCreateRunRequest['environment'];
     roleProfile?: CompiledRoleProfile;
-    minimalContext?: RuntimeMinimalContext;
-    queueMode: RuntimeQueueMode;
     reasonText: string;
     source: PiMonoCreateRunRequest['source'];
   }) {
@@ -2162,14 +2195,7 @@ export class PiMonoAdapter {
     );
     const state = input.state;
     const turn = state.currentTurn;
-    const contextBinding = state.currentContextBinding
-      ? {
-          projectId: state.currentContextBinding.projectId,
-          environmentId: state.currentContextBinding.environmentId,
-          feishuChatId: state.currentContextBinding.feishuChatId,
-          groupSessionId: state.currentContextBinding.groupSessionId ?? null,
-        }
-      : undefined;
+    const contextBinding = state.currentContext;
     if (!turn) {
       this.logger.warn(
         `[RUNTIME TURN] aborted: no currentTurn found for session=${state.runtimeSessionKey}`,
@@ -2177,13 +2203,8 @@ export class PiMonoAdapter {
       return;
     }
 
-    await this.recordRuntimeEvent(state, 'turn_started', {
-      turnId: turn.turnId,
-      messageSourceId: turn.messageSourceId,
-      queueLength: state.queue.length,
-    });
     this.logger.log(
-      `runtime turn started: session=${state.runtimeSessionKey} turn=${turn.turnId} source=${turn.messageSourceId ?? 'unknown'} queue=${state.queue.length}`,
+      `runtime turn started: session=${state.runtimeSessionKey} turn=${turn.turnId} source=${turn.messageSourceId ?? 'unknown'}`,
     );
 
     try {
@@ -2197,8 +2218,6 @@ export class PiMonoAdapter {
           sessionMode: 'active',
           requestKind: 'group_runtime',
           wakeMode: 'interactive',
-          contextBinding: state.currentContextBinding,
-          minimalContext: input.minimalContext,
           roleProfile: input.roleProfile,
           runtimeTasks: state.runtimeTaskSnapshots,
           project: input.project,
@@ -2224,23 +2243,21 @@ export class PiMonoAdapter {
           await this.applyRuntimeTurnResult(state, result, input.source.messageSourceId ?? null, contextBinding);
         }
         if (result.status === 'timeout' && !salvaged) {
-          await this.recordRuntimeEvent(state, 'reply_emitted', {
-            text: '这条请求处理超时了。我已经停止本轮执行，请稍后重试，或者把问题拆小一点继续发给我。',
-            messageSourceId: input.source.messageSourceId ?? null,
-          });
+          // Timeout reply is handled in applyRuntimeTurnResult
         }
-        await this.recordRuntimeEvent(state, 'turn_failed', {
+        await this.recordRuntimeEvent(state, 'turn_completed', {
           turnId: turn.turnId,
           status: result.status,
+          outputSummary: result.outputSummary ?? null,
           salvaged,
-        }, contextBinding);
+        });
       } else {
         await this.applyRuntimeTurnResult(state, result, input.source.messageSourceId ?? null, contextBinding);
         if (!state.waitingReason) {
           await this.recordRuntimeEvent(state, 'turn_completed', {
             turnId: turn.turnId,
             outputSummary: result.outputSummary ?? null,
-          }, contextBinding);
+          });
         }
       }
     } catch (error) {
@@ -2251,65 +2268,17 @@ export class PiMonoAdapter {
       this.logger.warn(
         `runtime turn exception: session=${state.runtimeSessionKey} turn=${turn.turnId} ${errorMsg}`,
       );
-      await this.recordRuntimeEvent(state, 'turn_failed', {
+      await this.recordRuntimeEvent(state, 'turn_completed', {
         turnId: turn.turnId,
+        status: 'failed',
         errorMessage: errorMsg,
-      }, contextBinding);
+      });
     } finally {
       state.currentTurn = undefined;
       this.logger.log(
-        `runtime turn finalized: session=${state.runtimeSessionKey} waiting=${state.waitingReason ? 'yes' : 'no'} queued=${state.queue.length}`,
+        `runtime turn finalized: session=${state.runtimeSessionKey} waiting=${state.waitingReason ? 'yes' : 'no'}`,
       );
-      if (!state.waitingReason) {
-        await this.startNextQueuedTurn(state, input.project, input.environment, input.roleProfile, input.minimalContext);
-      }
     }
-  }
-
-  private async startNextQueuedTurn(
-    state: SessionRuntimeState,
-    project: PiMonoCreateRunRequest['project'],
-    environment: PiMonoCreateRunRequest['environment'],
-    roleProfile?: CompiledRoleProfile,
-    minimalContext?: RuntimeMinimalContext,
-  ) {
-    if (state.currentTurn || state.waitingReason || !state.queue.length) {
-      return;
-    }
-
-    const next = state.queue.shift()!;
-    state.currentTurn = {
-      turnId: randomUUID(),
-      startedAt: new Date().toISOString(),
-      mode: 'group_runtime',
-      messageSourceId: next.envelopes[0]?.messageSourceId,
-    };
-
-    void this.runRuntimeTurn({
-      state,
-      project,
-      environment,
-      roleProfile,
-      minimalContext,
-      queueMode: next.mode,
-      reasonText: this.buildQueuedPrompt(next),
-      source: {
-        messageSourceId: next.envelopes[0]?.messageSourceId,
-        feishuMessageId: next.envelopes[0]?.feishuMessageId,
-        senderOpenId: next.envelopes[0]?.senderOpenId ?? null,
-        traceId: next.envelopes[0]?.traceId ?? null,
-      },
-    });
-  }
-
-  private buildQueuedPrompt(item: RuntimeQueuedMessage) {
-    if (item.envelopes.length === 1) {
-      return item.envelopes[0].rawText;
-    }
-    return [
-      'Process these collected group messages together as the next runtime turn:',
-      ...item.envelopes.map((envelope, index) => `${index + 1}. ${envelope.rawText}`),
-    ].join('\n');
   }
 
   private hasSalvageableRuntimeResult(result: GroupRuntimeTurnResult) {
@@ -2320,36 +2289,16 @@ export class PiMonoAdapter {
     state: SessionRuntimeState,
     result: GroupRuntimeTurnResult,
     messageSourceId: string | null,
-    contextBinding?: RuntimeContextBinding,
+    contextBinding?: SimplifiedContextBinding,
   ) {
     for (const action of result.actions) {
       if (action.type === 'todo_write') {
-        const snapshot = action.taskId ? this.findRuntimeTaskSnapshot(state, action.taskId) : null;
-        await this.recordRuntimeEvent(
-          state,
-          'todo_changed',
-          {
-            action: action.action,
-            task: snapshot,
-            messageSourceId,
-            feishuChatId: contextBinding?.feishuChatId ?? null,
-          },
-          contextBinding,
-        );
+        // Update internal state only - no event recording needed
         continue;
       }
 
       if (action.type === 'reply_group') {
-        await this.recordRuntimeEvent(
-          state,
-          'reply_emitted',
-          {
-            text: action.text,
-            messageSourceId,
-            feishuChatId: contextBinding?.feishuChatId ?? null,
-          },
-          contextBinding,
-        );
+        // Reply is captured in turn_completed - no separate event needed
         continue;
       }
 
@@ -2364,17 +2313,6 @@ export class PiMonoAdapter {
             snapshot.resultSummary = 'Waiting for confirmation';
             state.waitingTaskId = snapshot.id;
             state.waitingReason = snapshot.blockedReason ?? action.summary;
-            await this.recordRuntimeEvent(
-              state,
-              'todo_changed',
-              {
-                action: 'waiting_confirmation',
-                task: snapshot,
-                messageSourceId,
-                feishuChatId: contextBinding?.feishuChatId ?? null,
-              },
-              contextBinding,
-            );
           }
           if (!persistedTaskId && this.isUuid(action.taskId)) {
             persistedTaskId = action.taskId;
@@ -2395,34 +2333,11 @@ export class PiMonoAdapter {
             messageSourceId,
             feishuChatId: contextBinding?.feishuChatId ?? null,
           },
-          contextBinding,
-        );
-        await this.recordRuntimeEvent(
-          state,
-          'session_waiting',
-          {
-            taskId: persistedTaskId,
-            reason: action.summary,
-            feishuChatId: contextBinding?.feishuChatId ?? null,
-          },
-          contextBinding,
         );
       }
     }
 
-    if (result.outputs?.length) {
-      await this.recordRuntimeEvent(
-        state,
-        'outputs_emitted',
-        {
-          outputs: result.outputs,
-          messageSourceId,
-          taskId: this.findActiveRuntimeTaskId(state),
-          feishuChatId: contextBinding?.feishuChatId ?? null,
-        },
-        contextBinding,
-      );
-    }
+    // Outputs are captured in turn_completed - no separate event needed
   }
 
   private transitionRuntimeTask(state: SessionRuntimeState, action: GroupRuntimeTodoWriteAction) {
@@ -2547,7 +2462,7 @@ export class PiMonoAdapter {
     state: SessionRuntimeState,
     type: RuntimeEventType,
     payload: Record<string, unknown>,
-    contextBinding?: RuntimeContextBinding,
+    contextBinding?: SimplifiedContextBinding,
   ) {
     const event: RuntimeEvent = {
       sequence: state.eventSequence + 1,
@@ -2562,7 +2477,7 @@ export class PiMonoAdapter {
     }
     this.logger.log(`runtime event: session=${state.runtimeSessionKey} seq=${event.sequence} type=${event.type}`);
 
-    const eventContext = contextBinding ?? state.currentContextBinding;
+    const eventContext = contextBinding ?? state.currentContext;
 
     await (this.prisma as any).runtimeEvent.create({
       data: {
@@ -2580,91 +2495,20 @@ export class PiMonoAdapter {
     await this.syncRuntimeSessionProjection(state, event, eventContext);
   }
 
-  private async projectRuntimeEvent(state: SessionRuntimeState, event: RuntimeEvent, contextBinding?: RuntimeContextBinding) {
-    if (event.type === 'reply_emitted') {
-      const chatId =
-        typeof event.payload.feishuChatId === 'string'
-          ? event.payload.feishuChatId
-          : contextBinding?.feishuChatId ?? state.currentContextBinding?.feishuChatId;
-      const text = typeof event.payload.text === 'string' ? event.payload.text : null;
-      if (chatId && text) {
-        this.logger.log(`sending group reply: session=${state.runtimeSessionKey} chat=${chatId} length=${text.length}`);
-        await this.feishu.sendTextMessage('chat_id', chatId, text);
-      }
-      return;
-    }
-
-    if (event.type === 'todo_changed') {
-      const binding = contextBinding ?? state.currentContextBinding;
-      const task =
-        event.payload.task && typeof event.payload.task === 'object' && !Array.isArray(event.payload.task)
-          ? (event.payload.task as GroupRuntimeTaskSnapshot)
-          : null;
-      if (!task || !binding?.groupSessionId) {
-        return;
-      }
-      await this.prisma.groupRuntimeTask.upsert({
-        where: { id: task.id },
-        create: {
-          id: task.id,
-          groupSessionId: binding.groupSessionId,
-          projectId: binding.projectId,
-          environmentId: binding.environmentId,
-          messageSourceId:
-            typeof event.payload.messageSourceId === 'string' ? event.payload.messageSourceId : null,
-          title: task.title,
-          description: task.description ?? null,
-          intent: task.intent,
-          skillHint: task.skillHint ?? null,
-          outputMode: task.outputMode ?? null,
-          orderIndex: task.orderIndex,
-          status: task.status,
-          blockedReason: task.blockedReason ?? null,
-          nextActionHint: task.nextActionHint ?? null,
-          priority: task.priority ?? 0,
-          triggerType: task.triggerType ?? null,
-          taskPayloadJson: (this.withRuntimeTaskRef(task.taskPayloadJson, task.runtimeRef ?? null) ?? {}) as any,
-          resultSummary: task.resultSummary ?? null,
-          lastError: task.lastError ?? null,
-        },
-        update: {
-          messageSourceId:
-            typeof event.payload.messageSourceId === 'string' ? event.payload.messageSourceId : undefined,
-          title: task.title,
-          description: task.description ?? null,
-          intent: task.intent,
-          skillHint: task.skillHint ?? null,
-          outputMode: task.outputMode ?? null,
-          orderIndex: task.orderIndex,
-          status: task.status,
-          blockedReason: task.blockedReason ?? null,
-          nextActionHint: task.nextActionHint ?? null,
-          priority: task.priority ?? 0,
-          triggerType: task.triggerType ?? null,
-          taskPayloadJson: (this.withRuntimeTaskRef(task.taskPayloadJson, task.runtimeRef ?? null) ?? {}) as any,
-          resultSummary: task.resultSummary ?? null,
-          lastError: task.lastError ?? null,
-        },
-      });
-      return;
-    }
-
+  private async projectRuntimeEvent(state: SessionRuntimeState, event: RuntimeEvent, contextBinding?: SimplifiedContextBinding) {
+    // Note: reply_emitted, todo_changed, outputs_emitted event types removed in refactor
+    // Reply and outputs handling moved to applyRuntimeTurnResult
     if (event.type === 'confirmation_requested') {
       await this.createRuntimeConfirmation(state, event.payload, contextBinding);
-      return;
-    }
-
-    if (event.type === 'outputs_emitted') {
-      await this.createRuntimeAuditRun(state, event.payload, contextBinding);
     }
   }
 
   private async syncRuntimeSessionProjection(
     state: SessionRuntimeState,
     event: RuntimeEvent,
-    contextBinding?: RuntimeContextBinding,
+    contextBinding?: SimplifiedContextBinding,
   ) {
-    const groupSessionId = contextBinding?.groupSessionId ?? state.currentContextBinding?.groupSessionId;
+    const groupSessionId = contextBinding?.groupSessionId ?? state.currentContext?.groupSessionId;
     if (!groupSessionId) {
       return;
     }
@@ -2680,28 +2524,29 @@ export class PiMonoAdapter {
         ? ({ ...(existing.runtimeStateJson as Record<string, unknown>) })
         : {};
 
-    const snapshot = this.buildRuntimeStateSnapshot(state) as unknown as Record<string, unknown>;
+    const runtimeState = this.getRuntimeState(state.runtimeSessionKey);
     const nextState: Record<string, unknown> = {
       ...existingState,
-      runtimeSessionKey: snapshot.runtimeSessionKey,
-      piSessionId: snapshot.piSessionId,
-      status: snapshot.status,
-      queue: snapshot.queue,
-      isStreaming: snapshot.isStreaming,
-      isCompacting: snapshot.isCompacting,
-      memorySummary: snapshot.memorySummary ?? null,
-      currentTurn: snapshot.currentTurn ?? null,
-      waitingReason: snapshot.waitingReason ?? null,
+      runtimeSessionKey: state.runtimeSessionKey,
+      piSessionId: state.session.sessionId,
+      runtimeState: runtimeState ?? 'idle',
+      isStreaming: state.session.isStreaming,
+      memorySummary: state.lastAssistantText ?? null,
+      currentTurn: state.currentTurn ? {
+        turnId: state.currentTurn.turnId,
+        startedAt: state.currentTurn.startedAt,
+        messageSourceId: state.currentTurn.messageSourceId ?? null,
+      } : null,
+      waitingReason: state.waitingReason ?? null,
     };
 
-    if (event.type === 'turn_completed' || event.type === 'turn_failed' || event.type === 'session_waiting') {
+    if (event.type === 'turn_completed' || event.type === 'session_state_changed') {
       await this.clearRuntimeProcessingReaction(nextState);
     }
 
     await this.prisma.groupAgentSession.update({
       where: { id: groupSessionId },
       data: {
-        currentRuntimeTaskId: this.findActiveRuntimeTaskId(state),
         runtimeStateJson: nextState as any,
         lastRuntimeTurnAt: new Date(),
       },
@@ -2734,9 +2579,9 @@ export class PiMonoAdapter {
   private async createRuntimeConfirmation(
     state: SessionRuntimeState,
     payload: Record<string, unknown>,
-    contextBinding?: RuntimeContextBinding,
+    contextBinding?: SimplifiedContextBinding,
   ) {
-    const binding = contextBinding ?? state.currentContextBinding;
+    const binding = contextBinding ?? state.currentContext;
     const chatId = binding?.feishuChatId;
     const messageSourceId = typeof payload.messageSourceId === 'string' ? payload.messageSourceId : null;
     if (!chatId || !messageSourceId) {
@@ -2822,9 +2667,9 @@ export class PiMonoAdapter {
   private async createRuntimeAuditRun(
     state: SessionRuntimeState,
     payload: Record<string, unknown>,
-    contextBinding?: RuntimeContextBinding,
+    contextBinding?: SimplifiedContextBinding,
   ) {
-    const binding = contextBinding ?? state.currentContextBinding;
+    const binding = contextBinding ?? state.currentContext;
     if (!binding?.projectId || !binding.environmentId) {
       return;
     }

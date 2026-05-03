@@ -5,11 +5,11 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FeishuService } from '../feishu/feishu.service';
 import { ARTIFACT_SYNC_QUEUE } from '../../queues/queue.constants';
-import { GroupRuntimeResumeInput, RuntimeQueueMode, RuntimeStateSnapshot } from './agent.types';
+import { GroupRuntimeResumeInput } from './agent.types';
+import { RuntimeState } from './session-context.types';
 import { GroupAgentSessionService } from './group-agent-session.service';
-import { GroupRuntimeTaskService } from './group-runtime-task.service';
+import { SessionStateService } from './session-state.service';
 import { PiMonoAdapter } from './pi-mono.adapter';
-import { ProjectRuntimeContextService } from './project-runtime-context.service';
 import { RoleProfileService } from './role-profile.service';
 
 @Injectable()
@@ -21,9 +21,8 @@ export class GroupRuntimeService {
     private readonly prisma: PrismaService,
     private readonly piMono: PiMonoAdapter,
     private readonly groupSessions: GroupAgentSessionService,
+    private readonly sessionState: SessionStateService,
     private readonly roleProfiles: RoleProfileService,
-    private readonly runtimeTasks: GroupRuntimeTaskService,
-    private readonly runtimeContext: ProjectRuntimeContextService,
     private readonly feishu: FeishuService,
     @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactQueue: Queue,
   ) {}
@@ -38,12 +37,7 @@ export class GroupRuntimeService {
     senderOpenId?: string | null;
     traceId?: string | null;
   }) {
-    const environment = await this.prisma.projectEnvironment.findUniqueOrThrow({
-      where: { id: input.environmentId },
-    });
-    const project = await this.prisma.project.findUniqueOrThrow({
-      where: { id: input.projectId },
-    });
+    // Get or create session
     const session = await this.groupSessions.getOrCreateSession(input.feishuChatId, {
       projectId: input.projectId,
       environmentId: input.environmentId,
@@ -51,14 +45,13 @@ export class GroupRuntimeService {
       agentRole: AgentRole.manager,
       sessionMode: 'active',
     });
-    const groupPolicy = await this.prisma.groupPolicy.findFirst({
-      where: {
-        projectId: input.projectId,
-        feishuChatId: input.feishuChatId,
-        archivedAt: null,
-      },
-      orderBy: { updatedAt: 'desc' },
+
+    // Get project for role profile compilation
+    const project = await this.prisma.project.findUniqueOrThrow({
+      where: { id: input.projectId },
     });
+
+    // Compile role profile
     const roleProfile = await this.roleProfiles.compile({
       projectId: input.projectId,
       projectName: project.name,
@@ -66,74 +59,38 @@ export class GroupRuntimeService {
       senderOpenId: input.senderOpenId,
       agentRole: AgentRole.manager,
     });
-    const resourceSummary = await this.runtimeContext.buildManagerResourceSummary({
-      projectId: input.projectId,
-    });
-    const runtimeState = this.piMono.getRuntimeState(session.runtimeSessionKey);
-    const queueMode = this.resolveQueueMode(input.prompt, ((groupPolicy as any)?.defaultQueueMode as RuntimeQueueMode) ?? 'collect', runtimeState);
 
-    const submission = await this.piMono.submitMessage({
-      runtimeSessionKey: session.runtimeSessionKey,
-      contextBinding: {
-        groupSessionId: session.id,
+    // Direct steer call with role profile
+    const result = await this.piMono.steer(
+      session.runtimeSessionKey,
+      input.prompt,
+      {
         projectId: input.projectId,
         environmentId: input.environmentId,
         feishuChatId: input.feishuChatId,
-      },
-      queueMode,
-      project: {
-        id: project.id,
-        name: project.name,
-        feishuChatId: project.feishuChatId,
-      },
-      environment: {
-        id: environment.id,
-        name: environment.name,
-        piMonoEnvId: environment.piMonoEnvId,
-        repoUrl: environment.repoUrl,
-        repoBranch: environment.repoBranch,
-        repoCredentialRef: environment.repoCredentialRef,
-        repoMirrorPath: environment.repoMirrorPath,
-        repoSyncStatus: environment.repoSyncStatus,
-        repoSyncError: environment.repoSyncError,
-        repoHeadRef: environment.repoHeadRef,
-        projectPath: environment.projectPath,
-        modelEndpoint: environment.modelEndpoint,
-        modelName: environment.modelName,
-        skillSet: environment.skillSet,
+        messageSourceId: input.messageSourceId,
+        feishuMessageId: input.feishuMessageId,
+        senderOpenId: input.senderOpenId,
+        traceId: input.traceId,
       },
       roleProfile,
-      minimalContext: {
-        sessionMemorySummary: session.memorySummary,
-        repoReady: environment.repoSyncStatus === 'ready',
-        repoHeadRef: environment.repoHeadRef,
-        groupPolicy: groupPolicy
-          ? {
-              mentionOnly: groupPolicy.mentionOnly,
-              allowDocWrite: groupPolicy.allowDocWrite,
-              allowTaskBoardWrite: groupPolicy.allowTaskBoardWrite,
-              highRiskActionsRequireConfirmation: groupPolicy.highRiskActionsRequireConfirmation,
-            }
-          : null,
-        resourceSummary,
-      },
-      envelope: {
-        messageSourceId: input.messageSourceId,
-        sourceType: 'group',
-        senderOpenId: input.senderOpenId ?? null,
-        feishuChatId: input.feishuChatId,
-        feishuMessageId: input.feishuMessageId ?? null,
-        traceId: input.traceId ?? null,
-        rawText: input.prompt,
-      },
-    });
+    );
+
+    // Update state if starting execution
+    const currentState = await this.sessionState.getState(session.id);
+    if (currentState === 'idle') {
+      await this.sessionState.transitionTo(session.id, 'running', 'Message submitted');
+    }
+
+    // Sync runtime session state
     await this.syncRuntimeState(session.id, session.runtimeSessionKey);
     await this.clearProcessingReaction(session.id);
     await this.attachProcessingReaction(session.id, input.messageSourceId, input.feishuMessageId ?? null);
+
     return {
-      status: submission.action,
-      runtimeSessionKey: submission.runtimeSessionKey,
-      activeTurnId: submission.activeTurnId ?? null,
+      status: result.action,
+      runtimeSessionKey: result.runtimeSessionKey,
+      activeTurnId: result.activeTurnId ?? null,
     };
   }
 
@@ -142,8 +99,8 @@ export class GroupRuntimeService {
       where: { id },
       include: { messageSource: true },
     });
-    if (!confirmation?.groupRuntimeTaskId || !confirmation.projectId || !confirmation.environmentId) {
-      return;
+    if (!confirmation?.projectId || !confirmation?.environmentId) {
+      return { accepted: false };
     }
 
     const session = await this.groupSessions.getOrCreateSession(confirmation.messageSource.feishuChatId, {
@@ -153,12 +110,13 @@ export class GroupRuntimeService {
       agentRole: AgentRole.manager,
       sessionMode: 'active',
     });
+
+    // Get project for role profile compilation
     const project = await this.prisma.project.findUniqueOrThrow({
       where: { id: confirmation.projectId },
     });
-    const environment = await this.prisma.projectEnvironment.findUniqueOrThrow({
-      where: { id: confirmation.environmentId },
-    });
+
+    // Compile role profile
     const roleProfile = await this.roleProfiles.compile({
       projectId: confirmation.projectId,
       projectName: project.name,
@@ -166,73 +124,32 @@ export class GroupRuntimeService {
       senderOpenId: confirmation.confirmedBy ?? null,
       agentRole: AgentRole.manager,
     });
-    const groupPolicy = await this.prisma.groupPolicy.findFirst({
-      where: {
-        projectId: confirmation.projectId,
-        feishuChatId: confirmation.messageSource.feishuChatId,
-        archivedAt: null,
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
-    const resourceSummary = await this.runtimeContext.buildManagerResourceSummary({
-      projectId: confirmation.projectId,
-    });
 
-    const result = await this.piMono.resumeSession({
-      runtimeSessionKey: session.runtimeSessionKey,
-      contextBinding: {
-        groupSessionId: session.id,
-        projectId: confirmation.projectId,
-        environmentId: confirmation.environmentId,
-        feishuChatId: confirmation.messageSource.feishuChatId,
-      },
-      project: {
-        id: project.id,
-        name: project.name,
-        feishuChatId: project.feishuChatId,
-      },
-      environment: {
-        id: environment.id,
-        name: environment.name,
-        piMonoEnvId: environment.piMonoEnvId,
-        repoUrl: environment.repoUrl,
-        repoBranch: environment.repoBranch,
-        repoCredentialRef: environment.repoCredentialRef,
-        repoMirrorPath: environment.repoMirrorPath,
-        repoSyncStatus: environment.repoSyncStatus,
-        repoSyncError: environment.repoSyncError,
-        repoHeadRef: environment.repoHeadRef,
-        projectPath: environment.projectPath,
-        modelEndpoint: environment.modelEndpoint,
-        modelName: environment.modelName,
-        skillSet: environment.skillSet,
-      },
-      roleProfile,
-      minimalContext: {
-        sessionMemorySummary: session.memorySummary,
-        repoReady: environment.repoSyncStatus === 'ready',
-        repoHeadRef: environment.repoHeadRef,
-        groupPolicy: groupPolicy
-          ? {
-              mentionOnly: groupPolicy.mentionOnly,
-              allowDocWrite: groupPolicy.allowDocWrite,
-              allowTaskBoardWrite: groupPolicy.allowTaskBoardWrite,
-              highRiskActionsRequireConfirmation: groupPolicy.highRiskActionsRequireConfirmation,
-            }
-          : null,
-        resourceSummary,
-      },
-      event: {
+    // Clear waiting state
+    await this.sessionState.clearWaiting(session.id);
+
+    // Resume with followUp
+    const result = await this.piMono.followUp(
+      session.runtimeSessionKey,
+      {
         type: 'confirmation_resolved',
+        text: input.eventText,
         payload: {
           confirmationId: id,
           taskId: confirmation.groupRuntimeTaskId,
           messageSourceId: confirmation.messageSourceId,
           decidedStatus: confirmation.status,
         },
-        text: input.eventText,
       },
-    });
+      {
+        projectId: confirmation.projectId,
+        environmentId: confirmation.environmentId,
+        feishuChatId: confirmation.messageSource.feishuChatId,
+        messageSourceId: confirmation.messageSourceId,
+      },
+      roleProfile,
+    );
+
     await this.syncRuntimeState(session.id, session.runtimeSessionKey);
     return result;
   }
@@ -251,7 +168,7 @@ export class GroupRuntimeService {
     }
     return {
       session,
-      tasks: await this.runtimeTasks.listForSession(session.id),
+      tasks: [], // Tasks removed - GroupRuntimeTask table deprecated
       runtimeState:
         this.piMono.getRuntimeState(session.runtimeSessionKey) ??
         this.readRuntimeSnapshot(session.runtimeStateJson),
@@ -259,14 +176,7 @@ export class GroupRuntimeService {
         this.piMono.pullRuntimeEvents({ runtimeSessionKey: session.runtimeSessionKey }).length
           ? this.piMono.pullRuntimeEvents({ runtimeSessionKey: session.runtimeSessionKey })
           : await this.readPersistedRuntimeEvents(session.id),
-      profile: session.projectId
-        ? await this.roleProfiles.compile({
-            projectId: session.projectId,
-            projectName: session.feishuChatId,
-            feishuChatId: session.feishuChatId,
-            agentRole: AgentRole.manager,
-          })
-        : null,
+      profile: null, // Profile removed - use session context instead
     };
   }
 
@@ -369,11 +279,12 @@ export class GroupRuntimeService {
     return this.readRuntimeState(session?.runtimeStateJson);
   }
 
-  private readRuntimeSnapshot(value: unknown): RuntimeStateSnapshot | null {
+  private readRuntimeSnapshot(value: unknown): RuntimeState | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return null;
     }
-    return value as RuntimeStateSnapshot;
+    const obj = value as Record<string, unknown>;
+    return (obj.runtimeState as RuntimeState) ?? 'idle';
   }
 
   private async readPersistedRuntimeEvents(sessionId: string) {
@@ -400,61 +311,4 @@ export class GroupRuntimeService {
       : {};
   }
 
-  private resolveQueueMode(
-    rawText: string,
-    defaultQueueMode: RuntimeQueueMode,
-    runtimeState: RuntimeStateSnapshot | null,
-  ): RuntimeQueueMode {
-    const normalized = rawText.trim().toLowerCase();
-    if (!normalized) {
-      return defaultQueueMode;
-    }
-
-    const interruptSignals = [
-      '等等',
-      '等下',
-      '等一下',
-      '先别',
-      '先不要',
-      '不要做',
-      '暂停',
-      '停一下',
-      '先停',
-      'stop',
-      'pause',
-      'hold on',
-      'cancel that',
-    ];
-    if (interruptSignals.some((signal) => normalized.includes(signal))) {
-      return 'interrupt';
-    }
-
-    const followupSignals = ['继续', '接着', '按刚才', '照刚才', '往下做', '继续做', 'continue', 'go on'];
-    if (followupSignals.some((signal) => normalized.includes(signal))) {
-      return 'followup';
-    }
-
-    const supplementSignals = [
-      '补充',
-      '补一个',
-      '再加',
-      '加一个',
-      '另外',
-      '还有',
-      '顺便',
-      '补一句',
-      '再补充',
-      'also',
-      'add ',
-      'one more',
-    ];
-    if (supplementSignals.some((signal) => normalized.includes(signal))) {
-      if (runtimeState?.status === 'running' && runtimeState.isStreaming) {
-        return 'steer';
-      }
-      return 'collect';
-    }
-
-    return defaultQueueMode;
   }
-}
