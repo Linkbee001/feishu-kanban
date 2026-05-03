@@ -2,7 +2,7 @@
 
 **Project:** feishu-kanban
 **Status:** Active
-**Current Phase:** rebuild-1
+**Current Phase:** rebuild-1 (Complete)
 **Last Activity:** 2026-05-03
 
 ---
@@ -26,7 +26,7 @@
 
 | Milestone | Status | Phases | Progress |
 |-----------|--------|--------|----------|
-| Rebuild | Active | 1 | 86% |
+| Rebuild | Complete ✓ | 1 | 100% |
 
 ---
 
@@ -34,15 +34,15 @@
 
 | Phase | Name | Status | Plans | Notes |
 |-------|------|--------|-------|-------|
-| rebuild-1 | Group Runtime Refactor | In Progress | 6/7 | Wave 5 complete (Plan 06), Wave 6 next |
+| rebuild-1 | Group Runtime Refactor | Complete ✓ | 7/7 | All waves executed successfully |
 
 ---
 
 ## Current Position
 
-**Wave:** 5 of 6 complete
-**Next:** Wave 6 - Final Cleanup and Verification
-**Pending Plans:** 1 (07)
+**Phase:** rebuild-1 Complete
+**All Plans:** 7/7 complete
+**Database:** Migrated (GroupRuntimeTask table removed)
 
 ---
 
@@ -56,6 +56,7 @@
 | 2026-05-03 | 01-04 | Simplify GroupRuntimeService — Added steer/followUp, removed runtimeTasks |
 | 2026-05-03 | 01-05 | Simplify GroupAgentSessionService — Removed syncGroupRuntimeState, centralized state updates |
 | 2026-05-03 | 01-06 | Remove GroupRuntimeTask Infrastructure — Deleted service, table, all relations |
+| 2026-05-03 | 01-07 | Database Migration — Created PostgreSQL DB, applied all migrations |
 
 ---
 
@@ -72,6 +73,44 @@
 | 2026-05-03 | Wave 3 executed — Plan 03 complete (pi-mono adapter simplification) |
 | 2026-05-03 | Wave 4 executed — Plans 04 and 05 complete (runtime and session service simplification) |
 | 2026-05-03 | Wave 5 executed — Plan 06 complete (GroupRuntimeTask infrastructure removed) |
+| 2026-05-03 | Wave 6 executed — Plan 07 complete (database migration) |
+| 2026-05-03 | Phase rebuild-1 marked complete |
+
+---
+
+## Architecture Changes Summary
+
+### Before
+```
+Feishu WebSocket → BullMQ → FeishuEventService
+                          ↓
+                    GroupRuntimeService
+                          ↓
+                    ActorQueue (memory) + GroupRuntimeTask (DB)
+                          ↓
+                    PiMonoAdapter (queueMode: steer/followup/interrupt/collect/steer_backlog)
+                          ↓
+                    Pi SDK Session
+```
+
+### After
+```
+Feishu WebSocket → BullMQ → FeishuEventService (fire-and-forget)
+                          ↓
+                    GroupRuntimeService
+                          ↓
+                    SessionContext (identity + config + state)
+                          ↓
+                    PiMonoAdapter.steer() / followUp()
+                          ↓
+                    Pi SDK Session (handles queue internally)
+```
+
+### Key Simplifications
+1. **State Management**: RuntimeState enum ('idle' | 'running' | 'waiting_confirmation') replaces 4 overlapping variables
+2. **Queue Mechanism**: Pi SDK's steer/followUp replace custom ActorQueue + queueMode logic
+3. **Persistence**: RuntimeEvent reduced to 4 types, GroupRuntimeTask table removed
+4. **Context**: SessionContext consolidates multiple context interfaces
 
 ---
 
