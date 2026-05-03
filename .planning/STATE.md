@@ -26,7 +26,7 @@
 
 | Milestone | Status | Phases | Progress |
 |-----------|--------|--------|----------|
-| Rebuild | Active | 1 | 71% |
+| Rebuild | Active | 1 | 86% |
 
 ---
 
@@ -34,15 +34,15 @@
 
 | Phase | Name | Status | Plans | Notes |
 |-------|------|--------|-------|-------|
-| rebuild-1 | Group Runtime Refactor | In Progress | 5/7 | Wave 4 complete (Plans 04+05), Wave 5 next |
+| rebuild-1 | Group Runtime Refactor | In Progress | 6/7 | Wave 5 complete (Plan 06), Wave 6 next |
 
 ---
 
 ## Current Position
 
-**Wave:** 4 of 6 complete
-**Next:** Wave 5 - Remove GroupRuntimeTask Infrastructure
-**Pending Plans:** 2 (06-07)
+**Wave:** 5 of 6 complete
+**Next:** Wave 6 - Final Cleanup and Verification
+**Pending Plans:** 1 (07)
 
 ---
 
@@ -55,6 +55,7 @@
 | 2026-05-03 | 01-03 | Simplify PiMonoAdapter — Removed queue mechanism, ActorQueue, queueMode |
 | 2026-05-03 | 01-04 | Simplify GroupRuntimeService — Added steer/followUp, removed runtimeTasks |
 | 2026-05-03 | 01-05 | Simplify GroupAgentSessionService — Removed syncGroupRuntimeState, centralized state updates |
+| 2026-05-03 | 01-06 | Remove GroupRuntimeTask Infrastructure — Deleted service, table, all relations |
 
 ---
 
@@ -70,6 +71,7 @@
 | 2026-05-03 | Wave 2 executed — Plan 02 complete (state service) |
 | 2026-05-03 | Wave 3 executed — Plan 03 complete (pi-mono adapter simplification) |
 | 2026-05-03 | Wave 4 executed — Plans 04 and 05 complete (runtime and session service simplification) |
+| 2026-05-03 | Wave 5 executed — Plan 06 complete (GroupRuntimeTask infrastructure removed) |
 
 ---
 
