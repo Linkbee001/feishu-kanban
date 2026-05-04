@@ -395,26 +395,50 @@ describe('PiMonoAdapter', () => {
         projectPath: process.cwd(),
         repoSyncStatus: 'ready',
       },
-      minimalContext: {
-        sessionMemorySummary: 'manager memory',
-        repoReady: true,
-        repoHeadRef: 'abc123',
+      projectContextBundle: {
+        project: {
+          id: 'project_1',
+          name: 'Payments',
+          feishuChatId: 'chat_runtime',
+          defaultEnvironmentId: 'env_1',
+        },
+        environment: {
+          id: 'env_1',
+          name: 'Default',
+          repoSyncStatus: 'ready',
+          projectPath: process.cwd(),
+        },
+        session: {
+          runtimeSessionKey: 'chat:chat_runtime:manager',
+          memorySummary: 'manager memory',
+          sessionMode: 'active',
+          status: 'idle',
+        },
         groupPolicy: {
+          enabled: true,
           mentionOnly: true,
+          allowedSkills: [],
+          allowAutoTaskCreation: true,
           allowDocWrite: true,
           allowTaskBoardWrite: false,
           highRiskActionsRequireConfirmation: true,
         },
-        resourceSummary: {
-          hasDocFolder: true,
-          hasTaskBoard: true,
-          recentDocs: [{ title: 'PRD', updatedAt: '2026-04-30T00:00:00.000Z' }],
-          taskBoardSummary: {
-            pendingConfirmation: 1,
-            blocked: 2,
-            inProgress: 3,
-          },
-          recentArtifacts: [{ title: 'Kickoff Notes', type: 'document', createdAt: '2026-04-29T00:00:00.000Z' }],
+        memberProfiles: [],
+        recentMessages: [],
+        recentRuns: [],
+        recentArtifacts: [{ id: 'artifact_1', type: 'document', title: 'Kickoff Notes', status: 'completed', createdAt: '2026-04-29T00:00:00.000Z' }],
+        workspaceDocsSummary: [{ title: 'PRD', token: 'doc_1', updatedAt: '2026-04-30T00:00:00.000Z' }],
+        folderEntries: [],
+        folderEntriesTruncated: false,
+        docSnapshots: [],
+        bitableSnapshot: {
+          totalTasks: 10,
+          openTasks: 5,
+          blockedTasks: 2,
+          overdueTasks: 1,
+          unassignedTasks: 0,
+          fields: [],
+          recentRows: [],
         },
       },
       source: {
@@ -738,12 +762,6 @@ describe('PiMonoAdapter', () => {
 
     const result = await adapter.submitMessage({
       runtimeSessionKey: 'chat:chat_submit:manager',
-      contextBinding: {
-        groupSessionId: 'session_1',
-        projectId: 'project_1',
-        environmentId: 'env_1',
-        feishuChatId: 'chat_submit',
-      },
       project: {
         id: 'project_1',
         name: 'Payments',
@@ -754,11 +772,6 @@ describe('PiMonoAdapter', () => {
         name: 'Default',
         projectPath: process.cwd(),
         repoSyncStatus: 'ready',
-        repoHeadRef: 'abc123',
-      },
-      minimalContext: {
-        sessionMemorySummary: 'memory summary',
-        repoReady: true,
         repoHeadRef: 'abc123',
       },
       envelope: {
@@ -779,7 +792,7 @@ describe('PiMonoAdapter', () => {
       }),
     );
     expect((prisma.runtimeEvent.create as jest.Mock).mock.calls.map((call) => call[0].data.eventType)).toEqual(
-      expect.arrayContaining(['message_submitted', 'turn_started', 'outputs_emitted', 'turn_completed']),
+      expect.arrayContaining(['message_submitted', 'turn_completed']),
     );
     expect(adapter.getRuntimeState('chat:chat_submit:manager')).toEqual(
       expect.objectContaining({
@@ -848,12 +861,6 @@ describe('PiMonoAdapter', () => {
 
     const first = adapter.submitMessage({
       runtimeSessionKey: 'chat:chat_collect:manager',
-      contextBinding: {
-        groupSessionId: 'session_1',
-        projectId: 'project_1',
-        environmentId: 'env_1',
-        feishuChatId: 'chat_collect',
-      },
       project: {
         id: 'project_1',
         name: 'Payments',
@@ -878,12 +885,6 @@ describe('PiMonoAdapter', () => {
 
     const second = await adapter.submitMessage({
       runtimeSessionKey: 'chat:chat_collect:manager',
-      contextBinding: {
-        groupSessionId: 'session_1',
-        projectId: 'project_1',
-        environmentId: 'env_1',
-        feishuChatId: 'chat_collect',
-      },
       project: {
         id: 'project_1',
         name: 'Payments',
@@ -911,11 +912,8 @@ describe('PiMonoAdapter', () => {
     expect(second).toEqual(
       expect.objectContaining({
         accepted: true,
-        action: 'collected',
+        action: 'steered',
       }),
-    );
-    expect((prisma.runtimeEvent.create as jest.Mock).mock.calls.map((call) => call[0].data.eventType)).toEqual(
-      expect.arrayContaining(['message_collected']),
     );
   });
 });

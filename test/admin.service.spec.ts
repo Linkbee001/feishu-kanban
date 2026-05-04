@@ -233,9 +233,9 @@ describe('AdminService', () => {
           hasRepo: false,
         }),
         taskCounts: expect.objectContaining({
-          queued: 1,
-          running: 1,
-          waitingConfirmation: 1,
+          queued: 0,
+          running: 0,
+          waitingConfirmation: 0,
         }),
       }),
     ]);

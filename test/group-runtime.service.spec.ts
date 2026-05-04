@@ -98,21 +98,15 @@ describe('GroupRuntimeService', () => {
     const roleProfiles = {
       compile: jest.fn().mockResolvedValue(roleProfile),
     };
-    const runtimeTasks = {
-      listForSession: jest.fn().mockResolvedValue([]),
-    };
-    const runtimeContext = {
-      buildManagerResourceSummary: jest.fn().mockResolvedValue({
-        hasDocFolder: true,
-        hasTaskBoard: true,
-        recentDocs: [{ title: 'PRD', updatedAt: '2026-04-30T00:00:00.000Z' }],
-        taskBoardSummary: {
-          pendingConfirmation: 1,
-          blocked: 2,
-          inProgress: 3,
-        },
-        recentArtifacts: [{ title: 'Plan', type: 'document', createdAt: '2026-04-30T00:00:00.000Z' }],
+    const sessionState = {
+      getState: jest.fn().mockResolvedValue({
+        runtimeSessionKey: 'chat:chat_1:manager',
+        status: 'idle',
+        queue: [],
       }),
+      setState: jest.fn().mockResolvedValue(undefined),
+      transitionTo: jest.fn().mockResolvedValue(undefined),
+      clearWaiting: jest.fn().mockResolvedValue(undefined),
     };
     const feishu = {
       addMessageReaction: jest.fn().mockResolvedValue({ data: { reaction_id: 'reaction_1' } }),
@@ -124,9 +118,8 @@ describe('GroupRuntimeService', () => {
       prisma as any,
       piMono as any,
       groupSessions as any,
+      sessionState as any,
       roleProfiles as any,
-      runtimeTasks as any,
-      runtimeContext as any,
       feishu as any,
       artifactQueue as any,
     );
@@ -137,13 +130,13 @@ describe('GroupRuntimeService', () => {
       piMono,
       groupSessions,
       roleProfiles,
-      runtimeContext,
+      sessionState,
       session,
     };
   };
 
   it('submits a group message into the runtime orchestrator', async () => {
-    const { service, piMono, groupSessions, runtimeContext } = createService();
+    const { service, piMono, groupSessions, sessionState } = createService();
 
     const result = await service.handleMentionMessage({
       projectId: 'project_1',
@@ -183,9 +176,7 @@ describe('GroupRuntimeService', () => {
         }),
       }),
     );
-    expect(runtimeContext.buildManagerResourceSummary).toHaveBeenCalledWith({
-      projectId: 'project_1',
-    });
+    expect(sessionState.transitionTo).toHaveBeenCalled();
     expect(groupSessions.syncRuntimeSessionState).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'session_1',
