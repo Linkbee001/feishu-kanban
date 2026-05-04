@@ -2,8 +2,8 @@
 
 **Project:** feishu-kanban
 **Status:** Active
-**Current Phase:** rebuild-1 (Complete)
-**Last Activity:** 2026-05-03
+**Current Phase:** rebuild-2 (Complete)
+**Last Activity:** 2026-05-04
 
 ---
 
@@ -26,7 +26,7 @@
 
 | Milestone | Status | Phases | Progress |
 |-----------|--------|--------|----------|
-| Rebuild | Complete ✓ | 1 | 100% |
+| Rebuild | Complete | 2 | 100% (rebuild-1 and rebuild-2 complete) |
 
 ---
 
@@ -35,14 +35,15 @@
 | Phase | Name | Status | Plans | Notes |
 |-------|------|--------|-------|-------|
 | rebuild-1 | Group Runtime Refactor | Complete ✓ | 7/7 | All waves executed successfully |
+| rebuild-2 | Configuration Management | Complete ✓ | 5/5 | All waves executed successfully |
 
 ---
 
 ## Current Position
 
-**Phase:** rebuild-1 Complete
-**All Plans:** 7/7 complete
-**Database:** Migrated (GroupRuntimeTask table removed)
+**Phase:** rebuild-2 Complete ✓
+**All Plans:** 5/5 complete
+**Next Step:** Project ready for production use
 
 ---
 
@@ -50,20 +51,18 @@
 
 | Date | Plan | Summary |
 |------|------|---------|
-| 2026-05-03 | 01-01 | Define New Type System — Created SessionContext, RuntimeState enum |
-| 2026-05-03 | 01-02 | Create Session State Service — Centralized state management |
-| 2026-05-03 | 01-03 | Simplify PiMonoAdapter — Removed queue mechanism, ActorQueue, queueMode |
-| 2026-05-03 | 01-04 | Simplify GroupRuntimeService — Added steer/followUp, removed runtimeTasks |
-| 2026-05-03 | 01-05 | Simplify GroupAgentSessionService — Removed syncGroupRuntimeState, centralized state updates |
-| 2026-05-03 | 01-06 | Remove GroupRuntimeTask Infrastructure — Deleted service, table, all relations |
-| 2026-05-03 | 01-07 | Database Migration — Created PostgreSQL DB, applied all migrations |
+| 2026-05-04 | 02-01 | Define Config Doc Structure — Created config.types.ts, pending_config enum |
+| 2026-05-04 | 02-02 | Create GroupConfigService — Parser and configuration CRUD service |
+| 2026-05-04 | 02-03 | Create GroupConfigController — Admin API endpoints for config management |
+| 2026-05-04 | 02-04 | Remove Conversational Bootstrap — Fixed response for uninitialized groups |
+| 2026-05-04 | 02-05 | Simplify initFromChat — Removed 7 skeleton docs creation |
 
 ---
 
 ## History
 
 | Date | Event |
-|------|------|
+|------|-------|
 | 2026-05-02 | Codebase mapped (ARCHITECTURE, STACK, CONVENTIONS, etc.) |
 | 2026-05-02 | Phase context gathered (rebuild-1-CONTEXT.md) |
 | 2026-05-03 | ROADMAP created, ready for planning |
@@ -75,6 +74,10 @@
 | 2026-05-03 | Wave 5 executed — Plan 06 complete (GroupRuntimeTask infrastructure removed) |
 | 2026-05-03 | Wave 6 executed — Plan 07 complete (database migration) |
 | 2026-05-03 | Phase rebuild-1 marked complete |
+| 2026-05-03 | Phase rebuild-2 context created — Configuration Management |
+| 2026-05-03 | Phase rebuild-2 researched — bootstrap flow, Feishu API patterns |
+| 2026-05-03 | Phase rebuild-2 planned — 5 plans in 5 waves |
+| 2026-05-04 | Phase rebuild-2 executed — All 5 plans complete |
 
 ---
 
@@ -91,6 +94,10 @@ Feishu WebSocket → BullMQ → FeishuEventService
                     PiMonoAdapter (queueMode: steer/followup/interrupt/collect/steer_backlog)
                           ↓
                     Pi SDK Session
+
+Uninitialized Groups → handleUninitializedGroup → Pi SDK conversational bootstrap
+                                          ↓
+                                    7 skeleton documents created
 ```
 
 ### After
@@ -104,6 +111,14 @@ Feishu WebSocket → BullMQ → FeishuEventService (fire-and-forget)
                     PiMonoAdapter.steer() / followUp()
                           ↓
                     Pi SDK Session (handles queue internally)
+
+Uninitialized Groups → handlePendingConfigGroup → Fixed response (no Pi SDK)
+                                          ↓
+                                    Admin calls /api/group-config/:chatId/complete
+                                          ↓
+                                    PROJECT-CONFIG.md (single doc)
+                                          ↓
+                                    initFromChat (no skeleton docs)
 ```
 
 ### Key Simplifications
@@ -111,7 +126,9 @@ Feishu WebSocket → BullMQ → FeishuEventService (fire-and-forget)
 2. **Queue Mechanism**: Pi SDK's steer/followUp replace custom ActorQueue + queueMode logic
 3. **Persistence**: RuntimeEvent reduced to 4 types, GroupRuntimeTask table removed
 4. **Context**: SessionContext consolidates multiple context interfaces
+5. **Initialization**: Fixed response + backend config replaces Pi SDK conversational bootstrap
+6. **Documents**: Single PROJECT-CONFIG.md replaces 7 skeleton documents
 
 ---
 
-*Last updated: 2026-05-03*
+*Last updated: 2026-05-04*

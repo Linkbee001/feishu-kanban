@@ -1,16 +1,16 @@
 # Project Roadmap
 
 **Project:** feishu-kanban
-**Status:** Active
-**Last Updated:** 2026-05-03
+**Status:** Complete
+**Last Updated:** 2026-05-04
 
 ---
 
 ## Milestone: Rebuild
 
-**Goal:** Simplify group runtime architecture by removing redundant state management, queue mechanisms, and context objects.
+**Goal:** Simplify group runtime architecture and initialization flow by removing redundant state management, queue mechanisms, and conversational bootstrap.
 
-**Status:** Complete ✓ (2026-05-03)
+**Status:** Complete ✓
 
 ---
 
@@ -59,5 +59,49 @@
 
 ---
 
-*Generated: 2026-05-03*
-*Completed: 2026-05-03*
+### Phase: rebuild-2 — Configuration Management ✓
+
+**Goal:** Replace conversational bootstrap with explicit backend configuration management. Single config file instead of 7 skeleton documents. Fixed response for uninitialized groups.
+
+**Status:** Complete ✓ (2026-05-04)
+
+**Scope:**
+- Config File: Single `PROJECT-CONFIG.md` replacing 7 skeleton docs ✓
+- Initialization Flow: Fixed response + backend completion (no conversational bootstrap) ✓
+- Backend Module: `GroupConfigService` for configuration CRUD ✓
+- Session Mode: New `pending_config` mode replacing `bootstrap` ✓
+- API Endpoints: `/api/group-config/:chatId` for manual completion ✓
+
+**Files modified:**
+- Added: `config.types.ts`, `project-config.parser.ts`, `group-config.service.ts`, `group-config.controller.ts`, `config.module.ts` ✓
+- Modified: `prisma/schema.prisma` (pending_config enum, configDocToken field) ✓
+- Modified: `feishu-event.service.ts` (removed bootstrap logic, added fixed response) ✓
+- Modified: `project.service.ts` (removed createWorkspaceSkeleton) ✓
+
+**Cross-cutting constraints:**
+- No UI in this phase — Backend API only ✓
+- Manual sync first — Auto-sync deferred ✓
+- No migration — New groups only ✓
+- Config doc in Feishu Drive (not local file) ✓
+- Fixed response — No Pi SDK calls for uninitialized groups ✓
+
+---
+
+**Wave 1** ✓ *(foundation)*
+- Plan 01: Define Config Doc Structure ✓ — Added pending_config enum, created config.types.ts
+
+**Wave 2** ✓ *(blocked on Wave 1)*
+- Plan 02: Create GroupConfigService ✓ — Parser and configuration CRUD service
+
+**Wave 3** ✓ *(blocked on Wave 2)*
+- Plan 03: Create GroupConfigController ✓ — Admin API endpoints
+
+**Wave 4** ✓ *(blocked on Wave 3)*
+- Plan 04: Remove Conversational Bootstrap ✓ — Fixed response for uninitialized groups
+
+**Wave 5** ✓ *(blocked on Wave 4)*
+- Plan 05: Simplify initFromChat ✓ — Removed 7 skeleton docs creation
+
+---
+
+*Generated: 2026-05-04*
