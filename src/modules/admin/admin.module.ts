@@ -4,11 +4,12 @@ import { EnvironmentModule } from '../environment/environment.module';
 import { FeishuModule } from '../feishu/feishu.module';
 import { ProjectModule } from '../project/project.module';
 import { RepoModule } from '../repo/repo.module';
+import { ConfigModule } from '../config/config.module';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 
 @Module({
-  imports: [AgentModule, ProjectModule, FeishuModule, EnvironmentModule, RepoModule],
+  imports: [AgentModule, ProjectModule, FeishuModule, EnvironmentModule, RepoModule, ConfigModule],
   controllers: [AdminController],
   providers: [AdminService],
 })

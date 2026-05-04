@@ -5,6 +5,7 @@ import { AgentModule } from '../agent/agent.module';
 import { ProjectModule } from '../project/project.module';
 import { GroupConfigService } from './group-config.service';
 import { MarkdownProjectConfigParser } from './project-config.parser';
+import { GroupConfigController } from './group-config.controller';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { MarkdownProjectConfigParser } from './project-config.parser';
     forwardRef(() => AgentModule),
     forwardRef(() => ProjectModule),
   ],
+  controllers: [GroupConfigController],
   providers: [GroupConfigService, MarkdownProjectConfigParser],
   exports: [GroupConfigService, MarkdownProjectConfigParser],
 })
