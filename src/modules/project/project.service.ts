@@ -126,15 +126,6 @@ export class ProjectService {
       members: normalized.members,
     });
 
-    await this.createWorkspaceSkeleton({
-      projectName: normalized.name,
-      projectDescription: normalized.description,
-      docFolderToken: folder.token,
-      repoUrl: environment.repoUrl,
-      repoBranch: environment.repoBranch,
-      modelName: environment.modelName,
-    });
-
     const createdTabs = await this.feishu
       .createChatTabs(normalized.feishuChatId, [
         {
@@ -372,62 +363,5 @@ export class ProjectService {
       where: { id },
       data: { status: ProjectStatus.closed },
     });
-  }
-
-  private async createWorkspaceSkeleton(input: {
-    projectName: string;
-    projectDescription?: string;
-    docFolderToken?: string | null;
-    repoUrl?: string | null;
-    repoBranch?: string | null;
-    modelName?: string | null;
-  }) {
-    const docs = [
-      {
-        title: 'PROJECT.md',
-        content: [
-          `# ${input.projectName}`,
-          '',
-          input.projectDescription ?? '待补充项目描述。',
-          '',
-          '## 当前目标',
-          '- 明确项目范围、阶段目标与近期交付。',
-        ].join('\n'),
-      },
-      {
-        title: 'MEMBERS.md',
-        content: ['# Members', '', '待补充成员角色、职责与决策分工。'].join('\n'),
-      },
-      {
-        title: 'RULES.md',
-        content: ['# Rules', '', '- 高风险动作默认先确认。', '- 机器人默认只响应群内 @ 消息。'].join('\n'),
-      },
-      {
-        title: 'MEMORY.md',
-        content: ['# Memory', '', '记录长期有效的项目背景、约束与重要决定。'].join('\n'),
-      },
-      {
-        title: 'SKILLS.md',
-        content: ['# Skills', '', '列出当前允许机器人使用的主要技能与适用场景。'].join('\n'),
-      },
-      {
-        title: 'ENV.md',
-        content: [
-          '# Environment',
-          '',
-          `- Repo: ${input.repoUrl ?? '未配置'}`,
-          `- Branch: ${input.repoBranch ?? 'main'}`,
-          `- Model: ${input.modelName ?? '未配置'}`,
-        ].join('\n'),
-      },
-      {
-        title: 'TASKS.md',
-        content: ['# Tasks', '', '记录正式任务板之外的治理说明和任务同步约定。'].join('\n'),
-      },
-    ];
-
-    for (const doc of docs) {
-      await this.feishu.createDocument(doc.title, input.docFolderToken ?? undefined, doc.content).catch(() => null);
-    }
   }
 }
