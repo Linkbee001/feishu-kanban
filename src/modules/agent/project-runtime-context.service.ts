@@ -23,7 +23,7 @@ export class ProjectRuntimeContextService {
     projectId: string;
     environmentId: string;
     runtimeSessionKey: string;
-    sessionMode: 'bootstrap' | 'active' | 'disabled';
+    sessionMode: 'pending_config' | 'bootstrap' | 'active' | 'disabled';
     sessionStatus: 'idle' | 'busy' | 'error' | 'disabled';
     memorySummary?: string | null;
   }): Promise<ProjectContextBundle> {

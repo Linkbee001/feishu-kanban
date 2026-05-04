@@ -192,7 +192,7 @@ export class PiMonoAdapter {
     runtimeSessionKey: string;
     agentScopeKey?: string;
     sessionStoreRef?: string | null;
-    sessionMode?: 'bootstrap' | 'active' | 'disabled';
+    sessionMode?: 'pending_config' | 'bootstrap' | 'active' | 'disabled';
     projectContextBundle?: PiMonoCreateRunRequest['projectContextBundle'];
     project: PiMonoCreateRunRequest['project'];
     environment: PiMonoCreateRunRequest['environment'];

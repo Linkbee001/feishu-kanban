@@ -89,6 +89,7 @@ enum AgentRole {
 }
 
 enum GroupSessionMode {
+  pending_config
   bootstrap
   active
   disabled
@@ -117,6 +118,7 @@ model Project {
   feishuChatId         String               @unique @map("feishu_chat_id")
   status               ProjectStatus        @default(initializing)
   docFolderToken       String?              @map("doc_folder_token")
+  configDocToken       String?              @map("config_doc_token")
   bitableAppToken      String?              @map("bitable_app_token")
   bitableTableId       String?              @map("bitable_table_id")
   docChatTabId         String?              @map("doc_chat_tab_id")

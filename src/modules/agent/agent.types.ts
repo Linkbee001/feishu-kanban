@@ -1,6 +1,6 @@
 export type AgentOutputType = 'document' | 'task' | 'file' | 'log' | 'summary';
 export type AgentWakeMode = 'interactive' | 'scheduled_digest' | 'event_digest' | 'maintenance';
-export type RuntimeSessionMode = 'bootstrap' | 'active' | 'disabled';
+export type RuntimeSessionMode = 'pending_config' | 'bootstrap' | 'active' | 'disabled';
 export type DigestType =
   | 'daily_status'
   | 'weekly_report_draft'
