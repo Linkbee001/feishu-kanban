@@ -1,8 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { AppModule } from '../../src/app.module';
-import { AdminAuthGuard } from '../../src/common/auth/admin-auth.guard';
-import { HttpExceptionFilter } from '../../src/common/errors/http-exception.filter';
+import { AppModule } from '../../../src/app.module';
+import { AdminAuthGuard } from '../../../src/common/auth/admin-auth.guard';
+import { HttpExceptionFilter } from '../../../src/common/errors/http-exception.filter';
 
 /**
  * Creates an E2E test NestJS application with auth bypass.

@@ -25,8 +25,8 @@ const config: Config = {
   testTimeout: 30000, // E2E tests need longer timeout for async flows
   testPathIgnorePatterns: ['/node_modules/'],
   modulePathIgnorePatterns: ['/dist/'],
-  // Setup files can be added here if needed for global hooks
-  // setupFilesAfterEnv: ['./setup/jest-setup.ts'],
+  // Transform ES modules in node_modules (nanoid is an ES module)
+  transformIgnorePatterns: ['node_modules/(?!(nanoid)/)'],
 };
 
 export default config;

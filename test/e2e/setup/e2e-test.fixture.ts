@@ -1,4 +1,4 @@
-import { PrismaService } from '../../src/common/prisma/prisma.service';
+import { PrismaService } from '../../../src/common/prisma/prisma.service';
 
 /**
  * E2E test fixture providing setup/teardown lifecycle and test data helpers.
