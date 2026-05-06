@@ -553,22 +553,16 @@ export class PiPromptBuilder {
 
 **Note:** Claims A1-A3 are based on code analysis, not external verification. Planner should confirm with user before execution.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should `PiSessionStateService` be introduced?**
-   - What we know: `SessionRuntimeState` is shared across all services.
-   - What's unclear: Whether to create a dedicated service or pass state as parameter.
-   - Recommendation: Create `PiSessionStateService` to manage state creation, hydration, and cleanup. This provides clear ownership and reduces parameter passing.
+   - **Resolution:** YES - PiSessionStateService introduced in Plan 01 Task 2. It manages SessionRuntimeState creation, hydration, and cleanup, providing clear ownership and reducing parameter passing complexity.
 
 2. **What test coverage targets per service?**
-   - What we know: Existing `pi-mono.adapter.spec.ts` has 919 lines covering integration paths.
-   - What's unclear: Minimum coverage percentage for new services.
-   - Recommendation: Target 80% coverage for pure function services (PiPromptBuilder, PiOutputProcessor), 60% for stateful services.
+   - **Resolution:** 80% coverage for pure function services (PiPromptBuilder, PiOutputProcessor), 60% for stateful services (PiSessionManager, PiExecutor, PiEventRecorder, PiToolRegistry). Targets implemented in test tasks for each service.
 
 3. **Should PiToolRegistry inject other services?**
-   - What we know: Tool execute functions call `getProjectRuntimeResource`, `getOrLoadCachedToolResult`.
-   - What's unclear: Whether PiToolRegistry should inject Prisma/FeishuProjectReader or receive them in execute context.
-   - Recommendation: PiToolRegistry should inject dependencies, tools receive state parameter.
+   - **Resolution:** YES - PiToolRegistry injects PrismaService, FeishuProjectReader, PiOutputProcessor, ConfigService (Plan 06 Task 1). Tools receive state parameter, dependencies are resolved via constructor injection.
 
 ## Sources
 

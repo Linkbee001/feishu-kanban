@@ -84,4 +84,10 @@ Uninitialized Groups → handlePendingConfigGroup → Fixed response (no Pi SDK)
 
 ---
 
+## Nyquist Validation
+
+**Phase rebuild-3:** Nyquist validation skipped — refactor phase with existing test coverage (`test/pi-mono.adapter.spec.ts`, 919 lines). Behavioral equivalence validated through existing integration tests. No new API endpoints or state machines requiring pre-implementation test scaffolds.
+
+---
+
 *Last updated: 2026-05-06 after rebuild-3 context gathered*

@@ -56,6 +56,8 @@ Refactor the 2834-line `pi-mono.adapter.ts` into 5-6 focused services with clear
 - Order: PiSessionManager → PiExecutor → PiPromptBuilder → PiOutputProcessor → PiEventRecorder → PiToolRegistry
 - Each step: create service, move methods, update PiMonoAdapter to delegate, run tests
 
+**Note:** Order adjusted to: PiSessionManager → PiPromptBuilder/PiOutputProcessor (pure) → PiExecutor → PiEventRecorder → PiToolRegistry. Pure functions (PiPromptBuilder, PiOutputProcessor) have no dependencies and can be extracted independently in Wave 1, parallel to foundation services. This was approved by user during planning review.
+
 ### Testing Strategy
 
 - **D-10:** **Rely on existing tests** to validate refactoring correctness
@@ -116,6 +118,5 @@ Refactor the 2834-line `pi-mono.adapter.ts` into 5-6 focused services with clear
 None — discussion stayed within phase scope.
 
 ---
-
 *Phase: 03-rebuild-3*
 *Context gathered: 2026-05-06*
