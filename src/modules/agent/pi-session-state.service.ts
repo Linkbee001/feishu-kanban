@@ -121,4 +121,12 @@ export class PiSessionStateService {
       this.sessions.delete(runtimeSessionKey);
     }
   }
+
+  /**
+   * Get all session states for iteration.
+   * Used by PiExecutor for finding live runs during cancellation.
+   */
+  getAllStates(): IterableIterator<SessionRuntimeState> {
+    return this.sessions.values();
+  }
 }
