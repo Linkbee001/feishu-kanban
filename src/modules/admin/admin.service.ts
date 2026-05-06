@@ -317,7 +317,7 @@ export class AdminService {
     return snapshot?.tasks ?? [];
   }
 
-  async getLogs(chatId: string) {
+  async getLogs(chatId: string, options?: { since?: number; limit?: number; eventType?: string }) {
     const session = await this.prisma.groupAgentSession.findUnique({
       where: {
         feishuChatId_agentRole: {
@@ -330,37 +330,63 @@ export class AdminService {
       throw new NotFoundException('Robot instance not found');
     }
 
+    const limit = options?.limit ?? 50;
+    const since = options?.since;
+
     const [messages, runs, artifacts, confirmations, runtimeEvents] = await Promise.all([
       this.prisma.messageSource.findMany({
-        where: { feishuChatId: chatId },
+        where: {
+          feishuChatId: chatId,
+          ...(since ? { receivedAt: { gte: new Date(since) } } : {}),
+        },
         orderBy: { receivedAt: 'desc' },
-        take: 20,
+        take: limit,
       }),
       this.prisma.agentRun.findMany({
-        where: { projectId: session.projectId },
+        where: {
+          projectId: session.projectId,
+          ...(since ? { createdAt: { gte: new Date(since) } } : {}),
+        },
         orderBy: { createdAt: 'desc' },
-        take: 20,
+        take: limit,
       }),
       this.prisma.artifact.findMany({
-        where: { projectId: session.projectId },
+        where: {
+          projectId: session.projectId,
+          ...(since ? { createdAt: { gte: new Date(since) } } : {}),
+        },
         orderBy: { createdAt: 'desc' },
-        take: 20,
+        take: limit,
       }),
       this.prisma.confirmationRequest.findMany({
-        where: { projectId: session.projectId },
+        where: {
+          projectId: session.projectId,
+          ...(since ? { createdAt: { gte: new Date(since) } } : {}),
+        },
         orderBy: { expiresAt: 'desc' },
-        take: 20,
+        take: limit,
       }),
       (this.prisma as any).runtimeEvent.findMany({
         where: {
           projectId: session.projectId,
+          ...(options?.eventType ? { eventType: options.eventType } : {}),
+          ...(since ? { createdAt: { gte: new Date(since) } } : {}),
         },
         orderBy: [{ createdAt: 'desc' }, { sequence: 'desc' }],
-        take: 50,
+        take: limit * 2, // More runtime events for monitoring
       }),
     ]);
 
-    return { messages, runs, artifacts, confirmations, runtimeEvents };
+    return {
+      chatId,
+      projectId: session.projectId,
+      messages,
+      runs,
+      artifacts,
+      confirmations,
+      runtimeEvents,
+      fetchedAt: Date.now(),
+    };
   }
 
   getMembers(chatId: string) {

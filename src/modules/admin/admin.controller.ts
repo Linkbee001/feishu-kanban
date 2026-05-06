@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { Response } from 'express';
 import { AdminAuthGuard } from '../../common/auth/admin-auth.guard';
 import { renderAdminConsolePage } from './admin-console.page';
@@ -46,8 +46,18 @@ export class AdminController {
   }
 
   @Get('api/admin/robot-instances/:chatId/logs')
-  getLogs(@Param('chatId') chatId: string) {
-    return this.admin.getLogs(chatId);
+  getLogs(
+    @Param('chatId') chatId: string,
+    @Query('since') since?: string,
+    @Query('limit') limit?: string,
+    @Query('eventType') eventType?: string,
+  ) {
+    const options = {
+      since: since ? parseInt(since, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      eventType,
+    };
+    return this.admin.getLogs(chatId, options);
   }
 
   @Get('api/admin/robot-instances/:chatId/members')
