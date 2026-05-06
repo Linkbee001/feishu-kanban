@@ -1,7 +1,7 @@
 # Project Roadmap
 
 **Project:** feishu-kanban
-**Status:** Planning — Phase 04 E2E Verification being planned
+**Status:** Complete — Phase 04 E2E Verification finished 2026-05-06
 **Last Updated:** 2026-05-06
 
 ---
@@ -10,7 +10,7 @@
 
 - ✅ **v1.0.0 — Rebuild** — Phases rebuild-1, rebuild-2 (shipped 2026-05-04) — [Archive](milestones/v1.0-ROADMAP.md)
 - ✅ **v1.1.0 — Architecture Refactor** — Phase rebuild-3 (complete 2026-05-06)
-- 🔄 **v1.2.0 — E2E Verification + Admin Dashboard** — Phase 04-e2e-verification (planning)
+- ✅ **v1.2.0 — E2E Verification + Admin Dashboard** — Phase 04-e2e-verification (complete 2026-05-06)
 
 ---
 
@@ -24,26 +24,27 @@
 
 **Context:** [.planning/phases/04-e2e-verification/04-CONTEXT.md](phases/04-e2e-verification/04-CONTEXT.md)
 
-**Status:** Planning (2026-05-06)
+**Status:** Complete ✓ (2026-05-06)
 
 **Progress:**
 - [x] Context gathered
 - [x] Research complete
 - [x] Planning complete
-- [ ] Execution
-- [ ] Verification
+- [x] Verification passed
+- [x] Execution
+- [x] UAT
 
 **Plans:** 8 plans in 4 waves
 
 Plans:
-- [ ] 04-01-PLAN.md — Wave 0: E2E test infrastructure (test/e2e directory, fixtures, Jest config)
-- [ ] 04-02-PLAN.md — Wave 0: Frontend project setup (React + TailwindCSS + Vite)
-- [ ] 04-03-PLAN.md — Wave 1: E2E tests for Admin API & Config Flow (D-04, D-02, D-10, D-11)
-- [ ] 04-04-PLAN.md — Wave 1: E2E tests for Message Flow & Agent Run (D-01, D-03)
-- [ ] 04-05-PLAN.md — Wave 1: Backend endpoints for Quick Delete, Reset Config, Log Viewing (D-10, D-11, D-12)
-- [ ] 04-06-PLAN.md — Wave 2: Admin Dashboard Layout & Components (D-06, D-07, D-09, D-13)
-- [ ] 04-07-PLAN.md — Wave 2: Feature components - InstanceDetail, LogViewer, RuntimeMonitor (D-09, D-12)
-- [ ] 04-08-PLAN.md — Wave 3: Frontend build integration with NestJS (D-08, D-14)
+- [x] 04-01-PLAN.md — Wave 0: E2E test infrastructure (test/e2e directory, fixtures, Jest config) ✓
+- [x] 04-02-PLAN.md — Wave 0: Frontend project setup (React + TailwindCSS + Vite) ✓
+- [x] 04-03-PLAN.md — Wave 1: E2E tests for Admin API & Config Flow (D-04, D-02, D-10, D-11) ✓
+- [x] 04-04-PLAN.md — Wave 1: E2E tests for Message Flow & Agent Run (D-01, D-03) ✓
+- [x] 04-05-PLAN.md — Wave 1: Backend endpoints for Quick Delete, Reset Config, Log Viewing (D-10, D-11, D-12) ✓
+- [x] 04-06-PLAN.md — Wave 2: Admin Dashboard Layout & Components (D-06, D-07, D-09, D-13) ✓
+- [x] 04-07-PLAN.md — Wave 2: Feature components - InstanceDetail, LogViewer, RuntimeMonitor (D-09, D-12) ✓
+- [x] 04-08-PLAN.md — Wave 3: Frontend build integration with NestJS (D-08, D-14) ✓
 
 ---
 
