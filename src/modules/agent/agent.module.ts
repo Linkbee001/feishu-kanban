@@ -16,6 +16,8 @@ import { GroupRuntimeService } from './group-runtime.service';
 import { RoleProfileService } from './role-profile.service';
 import { GroupRuntimeController } from './group-runtime.controller';
 import { SessionStateService } from './session-state.service';
+import { PiSessionStateService } from './pi-session-state.service';
+import { PiSessionManager } from './pi-session-manager.service';
 
 @Module({
   imports: [
@@ -28,6 +30,8 @@ import { SessionStateService } from './session-state.service';
   providers: [
     AgentService,
     PiMonoAdapter,
+    PiSessionStateService,
+    PiSessionManager,
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
@@ -42,6 +46,8 @@ import { SessionStateService } from './session-state.service';
   exports: [
     AgentService,
     PiMonoAdapter,
+    PiSessionStateService,
+    PiSessionManager,
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
