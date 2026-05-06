@@ -13,6 +13,7 @@
     "start:worker": "node dist/src/worker.js",
     "worker:dev": "ts-node -r tsconfig-paths/register src/worker.ts",
     "test": "jest --runInBand",
+    "test:e2e": "jest --config test/e2e/jest-e2e.config.ts --runInBand",
     "test:pi-runtime": "jest --runInBand test/pi-mono.adapter.spec.ts",
     "test:group-runtime": "jest --runInBand test/group-runtime.service.spec.ts test/feishu-event.service.spec.ts",
     "verify:runtime-fast": "npm run test:pi-runtime && npm run test:group-runtime && npm run build",
