@@ -19,6 +19,7 @@ import { SessionStateService } from './session-state.service';
 import { PiSessionStateService } from './pi-session-state.service';
 import { PiSessionManager } from './pi-session-manager.service';
 import { PiPromptBuilder } from './pi-prompt-builder.service';
+import { PiOutputProcessor } from './pi-output-processor.service';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { PiPromptBuilder } from './pi-prompt-builder.service';
     PiSessionStateService,
     PiSessionManager,
     PiPromptBuilder,
+    PiOutputProcessor,
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
@@ -51,6 +53,7 @@ import { PiPromptBuilder } from './pi-prompt-builder.service';
     PiSessionStateService,
     PiSessionManager,
     PiPromptBuilder,
+    PiOutputProcessor,
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
