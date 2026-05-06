@@ -228,6 +228,66 @@ export class AdminService {
     };
   }
 
+  /**
+   * Reset robot instance to pending_config state (D-11).
+   * Deletes associated project data and clears session state fields.
+   */
+  async resetRobotInstanceConfig(chatId: string) {
+    const session = await this.prisma.groupAgentSession.findUnique({
+      where: {
+        feishuChatId_agentRole: {
+          feishuChatId: chatId,
+          agentRole: 'manager',
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Robot instance not found');
+    }
+
+    const projectId = session.projectId;
+
+    // Delete associated project data if exists
+    if (projectId) {
+      // Delete in correct order
+      await this.prisma.runtimeEvent.deleteMany({ where: { projectId } });
+      await this.prisma.agentRun.deleteMany({ where: { projectId } });
+      await this.prisma.artifact.deleteMany({ where: { projectId } });
+      await this.prisma.confirmationRequest.deleteMany({ where: { projectId } });
+      await this.prisma.project.delete({ where: { id: projectId } });
+    }
+
+    // Reset session to pending_config state
+    const updatedSession = await this.prisma.groupAgentSession.update({
+      where: {
+        feishuChatId_agentRole: {
+          feishuChatId: chatId,
+          agentRole: 'manager',
+        },
+      },
+      data: {
+        projectId: null,
+        status: 'idle',
+        sessionMode: 'pending_config',
+        runtimeStateJson: {},
+        activeEnvironmentId: null,
+        lastError: null,
+      },
+    });
+
+    return {
+      chatId,
+      previousProjectId: projectId,
+      session: {
+        status: updatedSession.status,
+        sessionMode: updatedSession.sessionMode,
+        projectId: updatedSession.projectId,
+      },
+      message: 'Robot instance reset to pending_config state',
+    };
+  }
+
   async getRuntime(chatId: string) {
     const snapshot = await this.runtime.getSessionSnapshot(chatId);
     if (!snapshot) {

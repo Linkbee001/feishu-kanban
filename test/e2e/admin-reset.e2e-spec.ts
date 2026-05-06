@@ -95,7 +95,7 @@ describe('Admin API - Reset Config (D-11)', () => {
       expect(response.body.statusCode).toBe(404);
     });
 
-    it('sets session.status to pending_config', async () => {
+    it('sets session.sessionMode to pending_config', async () => {
       // Create test data
       const project = await prisma.project.create({
         data: {
@@ -124,7 +124,8 @@ describe('Admin API - Reset Config (D-11)', () => {
         .post(`/api/admin/robot-instances/${testChatId}/reset-config`)
         .expect(200);
 
-      expect(response.body.session.status).toBe('pending_config');
+      expect(response.body.session.sessionMode).toBe('pending_config');
+      expect(response.body.session.status).toBe('idle');
     });
 
     it('sets projectId to null after reset', async () => {
@@ -168,7 +169,7 @@ describe('Admin API - Reset Config (D-11)', () => {
         },
       });
       expect(updatedSession?.projectId).toBeNull();
-      expect(updatedSession?.status).toBe('pending_config');
+      expect(updatedSession?.sessionMode).toBe('pending_config');
     });
 
     it('deletes associated project after reset', async () => {
