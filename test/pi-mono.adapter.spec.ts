@@ -131,6 +131,24 @@ describe('PiMonoAdapter', () => {
     };
   }
 
+  function createToolRegistry() {
+    return {
+      createAllTools: jest.fn().mockReturnValue([
+        { name: 'emit_outputs', execute: jest.fn() },
+        { name: 'emit_decision', execute: jest.fn() },
+        { name: 'list_project_folder', execute: jest.fn() },
+        { name: 'read_project_doc', execute: jest.fn() },
+        { name: 'search_project_docs', execute: jest.fn() },
+        { name: 'read_project_bitable', execute: jest.fn() },
+        { name: 'list_recent_project_artifacts', execute: jest.fn() },
+        { name: 'todo_list', execute: jest.fn() },
+        { name: 'todo_write', execute: jest.fn() },
+        { name: 'reply_group', execute: jest.fn() },
+        { name: 'request_group_confirmation', execute: jest.fn() },
+      ]),
+    };
+  }
+
   function createModelRegistry() {
     return {
       find: jest.fn().mockReturnValue({ provider: 'bailian', id: 'kimi-k2.5' }),
@@ -151,6 +169,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\new-session.jsonl'),
@@ -245,6 +264,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue(storeRef),
@@ -305,6 +325,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
 
     const cwd = (adapter as any).resolveCwd({
@@ -328,6 +349,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\group-runtime.jsonl'),
@@ -559,6 +581,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
     const adapterOverride = new PiMonoAdapter(
       createConfig({ PI_MONO_GROUP_RUNTIME_TIMEOUT_SECONDS: 180 }) as any,
@@ -569,6 +592,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
 
     expect((adapterDefault as any).resolveGroupRuntimeTimeoutMs()).toBe(120_000);
@@ -585,6 +609,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
 
     const state = {
@@ -617,6 +642,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
 
     const outputs = (adapter as any).normalizeOutputs(
@@ -652,6 +678,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       eventRecorder as any,
+      createToolRegistry() as any,
     );
 
     const state = {
@@ -743,6 +770,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
 
     const result = (adapter as any).ensureGroupRuntimeReplyAction([], [], 'Final assistant summary');
@@ -769,6 +797,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       eventRecorder as any,
+      createToolRegistry() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\runtime-submit.jsonl'),
@@ -865,6 +894,7 @@ describe('PiMonoAdapter', () => {
       createArtifactQueue() as any,
       createExecutor() as any,
       createEventRecorder() as any,
+      createToolRegistry() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\runtime-collect.jsonl'),
