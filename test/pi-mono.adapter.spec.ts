@@ -99,6 +99,38 @@ describe('PiMonoAdapter', () => {
     };
   }
 
+  function createExecutor() {
+    return {
+      executePrompt: jest.fn(),
+      executeDecisionPrompt: jest.fn(),
+      executeGroupRuntimePrompt: jest.fn(),
+      cancelRun: jest.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  function createEventRecorder() {
+    return {
+      recordRuntimeEvent: jest.fn().mockImplementation(async (state: any) => {
+        state.eventSequence++;
+        state.recentEvents.push({
+          sequence: state.eventSequence,
+          at: new Date().toISOString(),
+          type: 'test',
+          payload: {},
+        });
+      }),
+      projectRuntimeEvent: jest.fn().mockResolvedValue(undefined),
+      syncRuntimeSessionProjection: jest.fn().mockResolvedValue(undefined),
+      clearRuntimeProcessingReaction: jest.fn().mockResolvedValue(undefined),
+      createRuntimeConfirmation: jest.fn().mockResolvedValue(undefined),
+      buildRuntimeConfirmationCard: jest.fn().mockReturnValue({
+        config: { wide_screen_mode: true },
+        header: { title: { tag: 'plain_text', content: 'test' }, template: 'orange' },
+        elements: [],
+      }),
+    };
+  }
+
   function createModelRegistry() {
     return {
       find: jest.fn().mockReturnValue({ provider: 'bailian', id: 'kimi-k2.5' }),
@@ -117,6 +149,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       redis as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\new-session.jsonl'),
@@ -209,6 +243,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       redis as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue(storeRef),
@@ -267,6 +303,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       createRedis() as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
 
     const cwd = (adapter as any).resolveCwd({
@@ -288,6 +326,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       redis as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\group-runtime.jsonl'),
@@ -517,6 +557,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       createRedis() as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
     const adapterOverride = new PiMonoAdapter(
       createConfig({ PI_MONO_GROUP_RUNTIME_TIMEOUT_SECONDS: 180 }) as any,
@@ -525,6 +567,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       createRedis() as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
 
     expect((adapterDefault as any).resolveGroupRuntimeTimeoutMs()).toBe(120_000);
@@ -539,6 +583,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       createRedis() as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
 
     const state = {
@@ -569,6 +615,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       createRedis() as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
 
     const outputs = (adapter as any).normalizeOutputs(
@@ -594,6 +642,7 @@ describe('PiMonoAdapter', () => {
   });
 
   it('salvages captured runtime actions and outputs when a group runtime turn times out', async () => {
+    const eventRecorder = createEventRecorder();
     const adapter = new PiMonoAdapter(
       createConfig() as any,
       createPrisma() as any,
@@ -601,6 +650,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       createRedis() as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      eventRecorder as any,
     );
 
     const state = {
@@ -608,7 +659,7 @@ describe('PiMonoAdapter', () => {
       cwd: process.cwd(),
       session: {} as any,
       sessionManager: {} as any,
-      currentContextBinding: {
+      currentContext: {
         projectId: 'project_1',
         environmentId: 'env_1',
         feishuChatId: 'chat_salvage',
@@ -631,8 +682,7 @@ describe('PiMonoAdapter', () => {
     } as any;
 
     const applySpy = jest.spyOn(adapter as any, 'applyRuntimeTurnResult').mockResolvedValue(undefined);
-    const eventSpy = jest.spyOn(adapter as any, 'recordRuntimeEvent').mockResolvedValue(undefined);
-    jest.spyOn(adapter as any, 'startNextQueuedTurn').mockResolvedValue(undefined);
+    const eventSpy = jest.spyOn(eventRecorder as any, 'recordRuntimeEvent').mockResolvedValue(undefined);
     jest.spyOn(adapter as any, 'executeGroupRuntimePrompt').mockResolvedValue({
       status: 'timeout',
       actions: [{ type: 'reply_group', text: 'partial reply' }],
@@ -666,16 +716,12 @@ describe('PiMonoAdapter', () => {
     );
     expect(eventSpy).toHaveBeenCalledWith(
       state,
-      'turn_failed',
+      null,
+      'turn_completed',
       expect.objectContaining({
         turnId: 'turn_salvage',
         status: 'timeout',
         salvaged: true,
-      }),
-      expect.objectContaining({
-        projectId: 'project_1',
-        environmentId: 'env_1',
-        feishuChatId: 'chat_salvage',
       }),
     );
     expect(eventSpy).not.toHaveBeenCalledWith(
@@ -695,6 +741,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       createRedis() as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
 
     const result = (adapter as any).ensureGroupRuntimeReplyAction([], [], 'Final assistant summary');
@@ -711,6 +759,7 @@ describe('PiMonoAdapter', () => {
     const config = createConfig();
     const redis = createRedis();
     const prisma = createPrisma();
+    const eventRecorder = createEventRecorder();
     const adapter = new PiMonoAdapter(
       config as any,
       prisma as any,
@@ -718,6 +767,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       redis as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      eventRecorder as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\runtime-submit.jsonl'),
@@ -791,7 +842,7 @@ describe('PiMonoAdapter', () => {
         action: 'run_now',
       }),
     );
-    expect((prisma.runtimeEvent.create as jest.Mock).mock.calls.map((call) => call[0].data.eventType)).toEqual(
+    expect((eventRecorder.recordRuntimeEvent as jest.Mock).mock.calls.map((call) => call[2])).toEqual(
       expect.arrayContaining(['message_submitted', 'turn_completed']),
     );
     expect(adapter.getRuntimeState('chat:chat_submit:manager')).toEqual(
@@ -812,6 +863,8 @@ describe('PiMonoAdapter', () => {
       createFeishuReader() as any,
       redis as any,
       createArtifactQueue() as any,
+      createExecutor() as any,
+      createEventRecorder() as any,
     );
     const fakeSessionManager = {
       getSessionFile: jest.fn().mockReturnValue('C:\\sessions\\managed\\runtime-collect.jsonl'),

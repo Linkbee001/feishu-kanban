@@ -44,6 +44,8 @@ type SimplifiedContextBinding = {
 };
 import { MANAGER_INTERACTIVE_DECISION_SCHEMA } from './agent.schemas';
 import { resolveBundledPiSkillsDir } from './pi-skill-mapping';
+import { PiExecutor } from './pi-executor.service';
+import { PiEventRecorder } from './pi-event-recorder.service';
 
 type PiSdkModule = typeof import('@mariozechner/pi-coding-agent');
 
@@ -175,10 +177,12 @@ export class PiMonoAdapter {
     private readonly feishuReader: FeishuProjectReader,
     @Inject(GROUP_AGENT_SESSION_REDIS) private readonly redis: Redis,
     @InjectQueue(ARTIFACT_SYNC_QUEUE) private readonly artifactQueue: Queue,
+    private readonly executor: PiExecutor,
+    private readonly eventRecorder: PiEventRecorder,
   ) {}
 
   async executeRun(runId: string, payload: PiMonoCreateRunRequest): Promise<PiMonoExecutionResult> {
-    return this.executePrompt({
+    return this.executor.executePrompt({
       runId,
       payload: {
         ...payload,
@@ -200,7 +204,7 @@ export class PiMonoAdapter {
     prompt: string;
     timeoutMs?: number;
   }): Promise<ManagerInteractiveDecision> {
-    const result = await this.executeDecisionPrompt({
+    const result = await this.executor.executeDecisionPrompt({
       payload: {
         runtimeSessionKey: input.runtimeSessionKey,
         sessionStoreRef: input.sessionStoreRef ?? null,
@@ -240,7 +244,7 @@ export class PiMonoAdapter {
     projectName?: string;
     timeoutMs?: number;
   }): Promise<AgentOutput[]> {
-    const result = await this.executePrompt({
+    const result = await this.executor.executePrompt({
       payload: {
         runtimeSessionKey: input.sessionKey,
         sessionMode: 'bootstrap',
@@ -291,7 +295,7 @@ export class PiMonoAdapter {
     requestKind?: 'group_runtime';
     outputSchema?: unknown;
   }): Promise<GroupRuntimeTurnResult> {
-    return this.executeGroupRuntimePrompt({
+    return this.executor.executeGroupRuntimePrompt({
       payload: {
         runtimeSessionKey: input.runtimeSessionKey,
         sessionStoreRef: input.sessionStoreRef ?? null,
@@ -315,21 +319,7 @@ export class PiMonoAdapter {
   }
 
   async cancelRun(runId: string): Promise<void> {
-    await this.redis.set(this.cancelKey(runId), '1', 'EX', this.cancelTtlSeconds());
-
-    const liveRun = this.findLiveRun(runId);
-    if (!liveRun) {
-      return;
-    }
-
-    if (liveRun.activeExecution) {
-      liveRun.activeExecution.canceled = true;
-    }
-    try {
-      await liveRun.session.abort();
-    } catch (error) {
-      this.logger.warn(`Failed to abort live pi mono run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    await this.executor.cancelRun(runId);
   }
 
   async rehydrateSession(input: {
@@ -376,7 +366,7 @@ export class PiMonoAdapter {
     state.currentRoleProfile = input.roleProfile;
 
     const envelope = input.envelope;
-    await this.recordRuntimeEvent(state, 'message_submitted', {
+    await this.eventRecorder.recordRuntimeEvent(state, this.getRuntimeState(state.runtimeSessionKey), 'message_submitted', {
       messageSourceId: envelope.messageSourceId,
       sourceType: envelope.sourceType,
       rawText: envelope.rawText,
@@ -488,7 +478,7 @@ export class PiMonoAdapter {
         taskId: state.waitingTaskId,
       });
     }
-    await this.recordRuntimeEvent(state, 'session_state_changed', {
+    await this.eventRecorder.recordRuntimeEvent(state, this.getRuntimeState(state.runtimeSessionKey), 'session_state_changed', {
       type: input.event.type,
       payload: input.event.payload,
       text: input.event.text ?? null,
@@ -2205,7 +2195,7 @@ export class PiMonoAdapter {
         if (result.status === 'timeout' && !salvaged) {
           // Timeout reply is handled in applyRuntimeTurnResult
         }
-        await this.recordRuntimeEvent(state, 'turn_completed', {
+        await this.eventRecorder.recordRuntimeEvent(state, this.getRuntimeState(state.runtimeSessionKey), 'turn_completed', {
           turnId: turn.turnId,
           status: result.status,
           outputSummary: result.outputSummary ?? null,
@@ -2214,7 +2204,7 @@ export class PiMonoAdapter {
       } else {
         await this.applyRuntimeTurnResult(state, result, input.source.messageSourceId ?? null, contextBinding);
         if (!state.waitingReason) {
-          await this.recordRuntimeEvent(state, 'turn_completed', {
+          await this.eventRecorder.recordRuntimeEvent(state, this.getRuntimeState(state.runtimeSessionKey), 'turn_completed', {
             turnId: turn.turnId,
             outputSummary: result.outputSummary ?? null,
           });
@@ -2228,7 +2218,7 @@ export class PiMonoAdapter {
       this.logger.warn(
         `runtime turn exception: session=${state.runtimeSessionKey} turn=${turn.turnId} ${errorMsg}`,
       );
-      await this.recordRuntimeEvent(state, 'turn_completed', {
+      await this.eventRecorder.recordRuntimeEvent(state, this.getRuntimeState(state.runtimeSessionKey), 'turn_completed', {
         turnId: turn.turnId,
         status: 'failed',
         errorMessage: errorMsg,
@@ -2281,8 +2271,9 @@ export class PiMonoAdapter {
           state.waitingReason = action.summary;
         }
 
-        await this.recordRuntimeEvent(
+        await this.eventRecorder.recordRuntimeEvent(
           state,
+          this.getRuntimeState(state.runtimeSessionKey),
           'confirmation_requested',
           {
             taskId: persistedTaskId,
@@ -2416,211 +2407,6 @@ export class PiMonoAdapter {
 
   private isUuid(value: string) {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
-  }
-
-  private async recordRuntimeEvent(
-    state: SessionRuntimeState,
-    type: RuntimeEventType,
-    payload: Record<string, unknown>,
-    contextBinding?: SimplifiedContextBinding,
-  ) {
-    const event: RuntimeEvent = {
-      sequence: state.eventSequence + 1,
-      at: new Date().toISOString(),
-      type,
-      payload,
-    };
-    state.eventSequence = event.sequence;
-    state.recentEvents.push(event);
-    if (state.recentEvents.length > 100) {
-      state.recentEvents.splice(0, state.recentEvents.length - 100);
-    }
-    this.logger.log(`runtime event: session=${state.runtimeSessionKey} seq=${event.sequence} type=${event.type}`);
-
-    const eventContext = contextBinding ?? state.currentContext;
-
-    await (this.prisma as any).runtimeEvent.create({
-      data: {
-        runtimeSessionKey: state.runtimeSessionKey,
-        groupSessionId: eventContext?.groupSessionId ?? null,
-        projectId: eventContext?.projectId ?? null,
-        environmentId: eventContext?.environmentId ?? null,
-        sequence: event.sequence,
-        eventType: event.type,
-        payload: event.payload as any,
-      },
-    });
-
-    await this.projectRuntimeEvent(state, event, eventContext);
-    await this.syncRuntimeSessionProjection(state, event, eventContext);
-  }
-
-  private async projectRuntimeEvent(state: SessionRuntimeState, event: RuntimeEvent, contextBinding?: SimplifiedContextBinding) {
-    // Note: reply_emitted, todo_changed, outputs_emitted event types removed in refactor
-    // Reply and outputs handling moved to applyRuntimeTurnResult
-    if (event.type === 'confirmation_requested') {
-      await this.createRuntimeConfirmation(state, event.payload, contextBinding);
-    }
-  }
-
-  private async syncRuntimeSessionProjection(
-    state: SessionRuntimeState,
-    event: RuntimeEvent,
-    contextBinding?: SimplifiedContextBinding,
-  ) {
-    const groupSessionId = contextBinding?.groupSessionId ?? state.currentContext?.groupSessionId;
-    if (!groupSessionId) {
-      return;
-    }
-
-    const existing = await this.prisma.groupAgentSession.findUnique({
-      where: { id: groupSessionId },
-      select: { runtimeStateJson: true },
-    });
-    const existingState =
-      existing?.runtimeStateJson &&
-      typeof existing.runtimeStateJson === 'object' &&
-      !Array.isArray(existing.runtimeStateJson)
-        ? ({ ...(existing.runtimeStateJson as Record<string, unknown>) })
-        : {};
-
-    const runtimeState = this.getRuntimeState(state.runtimeSessionKey);
-    const nextState: Record<string, unknown> = {
-      ...existingState,
-      runtimeSessionKey: state.runtimeSessionKey,
-      piSessionId: state.session.sessionId,
-      runtimeState: runtimeState ?? 'idle',
-      isStreaming: state.session.isStreaming,
-      memorySummary: state.lastAssistantText ?? null,
-      currentTurn: state.currentTurn ? {
-        turnId: state.currentTurn.turnId,
-        startedAt: state.currentTurn.startedAt,
-        messageSourceId: state.currentTurn.messageSourceId ?? null,
-      } : null,
-      waitingReason: state.waitingReason ?? null,
-    };
-
-    if (event.type === 'turn_completed' || event.type === 'session_state_changed') {
-      await this.clearRuntimeProcessingReaction(nextState);
-    }
-
-    await this.prisma.groupAgentSession.update({
-      where: { id: groupSessionId },
-      data: {
-        runtimeStateJson: nextState as any,
-        lastRuntimeTurnAt: new Date(),
-      },
-    });
-  }
-
-  private async clearRuntimeProcessingReaction(runtimeState: Record<string, unknown>) {
-    const reaction =
-      runtimeState.processingReaction &&
-      typeof runtimeState.processingReaction === 'object' &&
-      !Array.isArray(runtimeState.processingReaction)
-        ? (runtimeState.processingReaction as Record<string, unknown>)
-        : null;
-    const messageId = typeof reaction?.feishuMessageId === 'string' ? reaction.feishuMessageId : null;
-    const reactionId = typeof reaction?.reactionId === 'string' ? reaction.reactionId : null;
-    if (messageId && reactionId) {
-      try {
-        await this.feishu.removeMessageReaction(messageId, reactionId);
-      } catch (error) {
-        this.logger.warn(
-          `Failed to clear processing reaction ${reactionId} for message ${messageId}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
-    delete runtimeState.processingReaction;
-  }
-
-  private async createRuntimeConfirmation(
-    state: SessionRuntimeState,
-    payload: Record<string, unknown>,
-    contextBinding?: SimplifiedContextBinding,
-  ) {
-    const binding = contextBinding ?? state.currentContext;
-    const chatId = binding?.feishuChatId;
-    const messageSourceId = typeof payload.messageSourceId === 'string' ? payload.messageSourceId : null;
-    if (!chatId || !messageSourceId) {
-      return;
-    }
-    const ttl = this.config.get<number>('CONFIRMATION_TTL_MINUTES') ?? 30;
-    const expiresAt = new Date(Date.now() + ttl * 60_000);
-    const confirmation = await this.prisma.confirmationRequest.create({
-      data: {
-        projectId: binding?.projectId,
-        environmentId: binding?.environmentId,
-        messageSourceId,
-        actionType: typeof payload.actionType === 'string' ? payload.actionType : 'runtime_confirmation',
-        payload: (payload.payload ?? {}) as any,
-        expiresAt,
-      },
-    });
-    const sent = await this.feishu.sendCard(
-      'chat_id',
-      chatId,
-      this.buildRuntimeConfirmationCard(
-        confirmation.id,
-        typeof payload.actionType === 'string' ? payload.actionType : 'runtime_confirmation',
-        expiresAt,
-        typeof payload.summary === 'string' ? payload.summary : undefined,
-        typeof payload.detail === 'string' ? payload.detail : undefined,
-      ),
-    );
-    const cardMessageId = (sent as any)?.data?.message_id ?? null;
-    await this.prisma.confirmationRequest.update({
-      where: { id: confirmation.id },
-      data: { cardMessageId },
-    });
-  }
-
-  private buildRuntimeConfirmationCard(
-    id: string,
-    actionType: string,
-    expiresAt: Date,
-    summary?: string,
-    detail?: string,
-  ) {
-    return {
-      config: { wide_screen_mode: true },
-      header: { title: { tag: 'plain_text', content: '需要确认' }, template: 'orange' },
-      elements: [
-        {
-          tag: 'div',
-          text: {
-            tag: 'lark_md',
-            content: [
-              `动作：${actionType}`,
-              summary ? `说明：${summary}` : null,
-              detail ? `原因：${detail}` : null,
-              `过期时间：${expiresAt.toISOString()}`,
-            ]
-              .filter(Boolean)
-              .join('\n'),
-          },
-        },
-        {
-          tag: 'action',
-          actions: [
-            {
-              tag: 'button',
-              text: { tag: 'plain_text', content: '确认' },
-              type: 'primary',
-              value: { confirmationId: id, decision: 'confirm' },
-            },
-            {
-              tag: 'button',
-              text: { tag: 'plain_text', content: '拒绝' },
-              type: 'danger',
-              value: { confirmationId: id, decision: 'reject' },
-            },
-          ],
-        },
-      ],
-    };
   }
 
   private async createRuntimeAuditRun(
