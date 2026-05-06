@@ -4,8 +4,13 @@ interface RuntimeMonitorProps {
   chatId: string;
 }
 
+interface RuntimeData {
+  runtimeState?: { status?: string };
+  runtimeEvents?: Array<{ eventType: string; createdAt: string }>;
+}
+
 export function RuntimeMonitor({ chatId }: RuntimeMonitorProps) {
-  const { data: runtime } = useApi(`/api/admin/robot-instances/${encodeURIComponent(chatId)}/runtime`);
+  const { data: runtime } = useApi<RuntimeData>(`/api/admin/robot-instances/${encodeURIComponent(chatId)}/runtime`);
 
   if (!runtime) {
     return <div className="p-4 text-muted">加载中...</div>;

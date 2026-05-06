@@ -4,10 +4,9 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
-  root: 'src',
-  publicDir: '../public',
+  publicDir: 'public',
   build: {
-    outDir: '../dist', // Output to frontend/dist for NestJS assets
+    outDir: 'dist', // Output to frontend/dist for NestJS assets
     emptyOutDir: true,
   },
   resolve: {

@@ -13,7 +13,7 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
 
   // Serve frontend static assets at /admin route
-  const frontendPath = path.join(__dirname, 'frontend');
+  const frontendPath = path.join(__dirname, 'frontend/dist');
   app.use('/admin', express.static(frontendPath));
 
   // SPA fallback - serve index.html for all /admin/* routes

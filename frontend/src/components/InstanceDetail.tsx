@@ -5,10 +5,31 @@ interface InstanceDetailProps {
   chatId: string;
 }
 
+interface Instance {
+  robotName: string;
+  projectName: string;
+  chatId: string;
+}
+
+interface RuntimeData {
+  runtimeState?: { status?: string; queue?: { length?: number }; waitingReason?: string };
+  runtimeEvents?: Array<{ eventType: string; createdAt: string; payload?: any }>;
+  summary?: { queued?: number; running?: number; blocked?: number; waitingConfirmation?: number; completed?: number };
+  isStreaming?: boolean;
+}
+
+interface LogsData {
+  messages?: Array<any>;
+  runs?: Array<any>;
+  artifacts?: Array<any>;
+  confirmations?: Array<any>;
+  runtimeEvents?: Array<{ eventType: string; createdAt: string }>;
+}
+
 export function InstanceDetail({ chatId }: InstanceDetailProps) {
   const [activeTab, setActiveTab] = useState<'runtime' | 'logs' | 'policy'>('runtime');
-  const { data: instance } = useApi(`/api/admin/robot-instances/${encodeURIComponent(chatId)}`);
-  const { data: runtime } = useApi(`/api/admin/robot-instances/${encodeURIComponent(chatId)}/runtime`);
+  const { data: instance } = useApi<Instance>(`/api/admin/robot-instances/${encodeURIComponent(chatId)}`);
+  const { data: runtime } = useApi<RuntimeData>(`/api/admin/robot-instances/${encodeURIComponent(chatId)}/runtime`);
 
   if (!instance) {
     return <div className="p-6 text-muted">加载中...</div>;
@@ -107,7 +128,7 @@ function RuntimeContent({ runtime }: { runtime: any }) {
 }
 
 function LogsContent({ chatId }: { chatId: string }) {
-  const { data: logs } = useApi(`/api/admin/robot-instances/${encodeURIComponent(chatId)}/logs`);
+  const { data: logs } = useApi<LogsData>(`/api/admin/robot-instances/${encodeURIComponent(chatId)}/logs`);
 
   if (!logs) return <p className="text-muted">加载中...</p>;
 
