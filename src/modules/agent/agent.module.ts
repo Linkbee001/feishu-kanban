@@ -18,6 +18,7 @@ import { GroupRuntimeController } from './group-runtime.controller';
 import { SessionStateService } from './session-state.service';
 import { PiSessionStateService } from './pi-session-state.service';
 import { PiSessionManager } from './pi-session-manager.service';
+import { PiPromptBuilder } from './pi-prompt-builder.service';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { PiSessionManager } from './pi-session-manager.service';
     PiMonoAdapter,
     PiSessionStateService,
     PiSessionManager,
+    PiPromptBuilder,
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
@@ -48,6 +50,7 @@ import { PiSessionManager } from './pi-session-manager.service';
     PiMonoAdapter,
     PiSessionStateService,
     PiSessionManager,
+    PiPromptBuilder,
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
