@@ -9,7 +9,11 @@ interface RobotInstance {
   runtimeStatus: string | null;
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  onSelectInstance?: (chatId: string) => void;
+}
+
+export function Sidebar({ onSelectInstance }: SidebarProps) {
   const { data: instances, loading, error } = useApi<RobotInstance[]>('/api/admin/robot-instances');
 
   if (loading) {
@@ -38,7 +42,7 @@ export function Sidebar() {
       </div>
       <div className="p-4 space-y-3">
         {instances?.map((instance) => (
-          <InstanceCard key={instance.chatId} instance={instance} />
+          <InstanceCard key={instance.chatId} instance={instance} onSelect={onSelectInstance} />
         ))}
         {instances?.length === 0 && (
           <p className="text-muted text-center py-4">暂无机器人实例</p>
@@ -48,9 +52,18 @@ export function Sidebar() {
   );
 }
 
-function InstanceCard({ instance }: { instance: RobotInstance }) {
+function InstanceCard({ instance, onSelect }: { instance: RobotInstance; onSelect?: (chatId: string) => void }) {
+  const handleClick = () => {
+    if (onSelect) {
+      onSelect(instance.chatId);
+    }
+  };
+
   return (
-    <div className="border border-gray-200 rounded-2xl bg-white p-3 hover:border-primary/30 hover:shadow-md transition-all cursor-pointer">
+    <div
+      className="border border-gray-200 rounded-2xl bg-white p-3 hover:border-primary/30 hover:shadow-md transition-all cursor-pointer"
+      onClick={handleClick}
+    >
       <h3 className="font-semibold text-ink">{instance.robotName}</h3>
       <div className="mt-2 space-y-1 text-sm text-muted">
         <p>项目: {instance.projectName}</p>

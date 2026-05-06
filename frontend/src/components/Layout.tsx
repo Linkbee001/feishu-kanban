@@ -3,9 +3,10 @@ import { Sidebar } from './Sidebar';
 
 interface LayoutProps {
   children: ReactNode;
+  onSelectInstance?: (chatId: string) => void;
 }
 
-export function Layout({ children }: LayoutProps) {
+export function Layout({ children, onSelectInstance }: LayoutProps) {
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#fbf7f1] to-[#f5efe6]">
       {/* Hero section */}
@@ -23,7 +24,7 @@ export function Layout({ children }: LayoutProps) {
       {/* Main layout */}
       <main className="max-w-[1520px] mx-auto px-6 pb-6">
         <div className="grid grid-cols-[360px_1fr] gap-4">
-          <Sidebar />
+          <Sidebar onSelectInstance={onSelectInstance} />
           <div className="bg-white/90 backdrop-blur-sm border border-white/70 rounded-3xl shadow-lg overflow-hidden">
             {children}
           </div>
