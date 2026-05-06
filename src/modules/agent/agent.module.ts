@@ -21,6 +21,7 @@ import { PiSessionManager } from './pi-session-manager.service';
 import { PiPromptBuilder } from './pi-prompt-builder.service';
 import { PiOutputProcessor } from './pi-output-processor.service';
 import { PiExecutor } from './pi-executor.service';
+import { PiEventRecorder } from './pi-event-recorder.service';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { PiExecutor } from './pi-executor.service';
     PiPromptBuilder,
     PiOutputProcessor,
     PiExecutor,
+    PiEventRecorder,
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
@@ -57,6 +59,7 @@ import { PiExecutor } from './pi-executor.service';
     PiPromptBuilder,
     PiOutputProcessor,
     PiExecutor,
+    PiEventRecorder,
     ProjectRuntimeContextService,
     GroupAgentSessionService,
     GroupRuntimeService,
