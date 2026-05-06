@@ -27,14 +27,15 @@
 | Milestone | Status | Phases | Progress |
 |-----------|--------|--------|----------|
 | v1.0.0 Rebuild | ✅ Complete | 2 | 100% — See [MILESTONES.md](MILESTONES.md) |
-| v1.1.0 Architecture Refactor | 🔄 In Progress | 1 | Context gathered |
+| v1.1.0 Architecture Refactor | 🔄 In Progress | 1 | Planning complete (6 plans) |
 
 ---
 
 ## Current Position
 
-**Status:** Phase rebuild-3 context gathered
-**Next Step:** Run `/gsd-plan-phase rebuild-3` to plan implementation
+**Status:** Phase rebuild-3 planned — ready to execute
+**Plans:** 6 plans in 5 waves
+**Next Step:** Run `/gsd-execute-phase rebuild-3` to execute all plans
 
 **Resume File:** `.planning/phases/03-rebuild-3/03-CONTEXT.md`
 
@@ -81,6 +82,7 @@ Uninitialized Groups → handlePendingConfigGroup → Fixed response (no Pi SDK)
 | 2026-05-04 | Phase rebuild-2 planned and executed |
 | 2026-05-04 | Milestone v1.0.0 completed and archived |
 | 2026-05-06 | Phase rebuild-3 context gathered |
+| 2026-05-06 | Phase rebuild-3 planned (6 plans in 5 waves) |
 
 ---
 
