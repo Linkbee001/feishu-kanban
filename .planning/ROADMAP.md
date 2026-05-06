@@ -55,6 +55,16 @@ Plans:
 | PiToolRegistry | Tool definitions (11 tools) | ~400 |
 | PiMonoAdapter (coordinator) | Delegation facade | ~300 |
 
+### Phase 4: E2E Verification - 端到端验证确保系统功能正常运行
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 3
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 4 to break down)
+
 ---
 
 ## Upcoming Phases
