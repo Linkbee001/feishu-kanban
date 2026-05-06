@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* Base styles matching existing admin console */
+body {
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
