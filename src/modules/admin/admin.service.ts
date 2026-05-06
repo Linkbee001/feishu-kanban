@@ -131,6 +131,103 @@ export class AdminService {
     };
   }
 
+  /**
+   * Quick delete all data associated with a robot instance (D-10).
+   * Deletes RuntimeEvents, AgentRuns, Artifacts, ConfirmationRequests,
+   * MessageSources, GroupAgentSession, and Project in cascade-safe order.
+   */
+  async deleteRobotInstance(chatId: string) {
+    // Find session and project first
+    const session = await this.prisma.groupAgentSession.findUnique({
+      where: {
+        feishuChatId_agentRole: {
+          feishuChatId: chatId,
+          agentRole: 'manager',
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Robot instance not found');
+    }
+
+    const projectId = session.projectId;
+
+    // Delete in correct order (respecting foreign key constraints)
+    const deleted = {
+      runtimeEvents: 0,
+      agentRuns: 0,
+      artifacts: 0,
+      messageSources: 0,
+      confirmationRequests: 0,
+      groupAgentSession: 0,
+      project: 0,
+    };
+
+    if (projectId) {
+      // Delete RuntimeEvents
+      deleted.runtimeEvents = await this.prisma.runtimeEvent
+        .deleteMany({
+          where: { projectId },
+        })
+        .then((r) => r.count);
+
+      // Delete AgentRuns
+      deleted.agentRuns = await this.prisma.agentRun
+        .deleteMany({
+          where: { projectId },
+        })
+        .then((r) => r.count);
+
+      // Delete Artifacts
+      deleted.artifacts = await this.prisma.artifact
+        .deleteMany({
+          where: { projectId },
+        })
+        .then((r) => r.count);
+
+      // Delete ConfirmationRequests
+      deleted.confirmationRequests = await this.prisma.confirmationRequest
+        .deleteMany({
+          where: { projectId },
+        })
+        .then((r) => r.count);
+
+      // Delete Project
+      deleted.project = await this.prisma.project
+        .deleteMany({
+          where: { id: projectId },
+        })
+        .then((r) => r.count);
+    }
+
+    // Delete MessageSources (by chatId)
+    deleted.messageSources = await this.prisma.messageSource
+      .deleteMany({
+        where: { feishuChatId: chatId },
+      })
+      .then((r) => r.count);
+
+    // Delete GroupAgentSession
+    deleted.groupAgentSession = await this.prisma.groupAgentSession
+      .delete({
+        where: {
+          feishuChatId_agentRole: {
+            feishuChatId: chatId,
+            agentRole: 'manager',
+          },
+        },
+      })
+      .then(() => 1);
+
+    return {
+      chatId,
+      projectId,
+      deleted,
+      message: 'Robot instance and all associated data deleted',
+    };
+  }
+
   async getRuntime(chatId: string) {
     const snapshot = await this.runtime.getSessionSnapshot(chatId);
     if (!snapshot) {

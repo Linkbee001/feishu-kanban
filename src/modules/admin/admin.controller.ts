@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
 import { Response } from 'express';
 import { AdminAuthGuard } from '../../common/auth/admin-auth.guard';
 import { renderAdminConsolePage } from './admin-console.page';
@@ -22,6 +22,11 @@ export class AdminController {
   @Get('api/admin/robot-instances/:chatId')
   getRobotInstance(@Param('chatId') chatId: string) {
     return this.admin.getRobotInstance(chatId);
+  }
+
+  @Delete('api/admin/robot-instances/:chatId')
+  deleteRobotInstance(@Param('chatId') chatId: string) {
+    return this.admin.deleteRobotInstance(chatId);
   }
 
   @Get('api/admin/robot-instances/:chatId/runtime')
