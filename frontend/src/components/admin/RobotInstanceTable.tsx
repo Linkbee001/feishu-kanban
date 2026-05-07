@@ -1,9 +1,9 @@
 /**
  * RobotInstanceTable component
- * TanStack Table for displaying robot instances with sortable columns
+ * TanStack Table for displaying robot instances with sortable columns and client-side filtering
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -16,6 +16,11 @@ import { useApi } from '../../hooks/useApi';
 import { RobotInstance } from '../../types/admin';
 import { StatusLabel } from './StatusLabel';
 import { RowActionButtons } from './RowActionButtons';
+
+interface RobotInstanceTableProps {
+  searchQuery?: string;
+  statusFilter?: string | null;
+}
 
 /**
  * Column definitions for RobotInstance table
@@ -54,16 +59,35 @@ const columns: ColumnDef<RobotInstance>[] = [
  * - Fetches data from /api/admin/robot-instances using useApi hook
  * - Columns match D-05 specification
  * - Column headers clickable for sorting (D-08)
+ * - Client-side filtering by searchQuery and statusFilter (D-07)
  * - Shows loading and error states
  */
-export function RobotInstanceTable() {
+export function RobotInstanceTable({ searchQuery = '', statusFilter = null }: RobotInstanceTableProps) {
   const { data: instances, loading, error } = useApi<RobotInstance[]>(
     '/api/admin/robot-instances'
   );
   const [sorting, setSorting] = useState<SortingState>([]);
 
+  // Client-side filtering (D-07)
+  const filteredData = useMemo(() => {
+    if (!instances) return [];
+
+    return instances.filter((instance) => {
+      // Search filter - matches chatId or projectName
+      const matchesSearch = !searchQuery ||
+        instance.chatId.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        instance.projectName.toLowerCase().includes(searchQuery.toLowerCase());
+
+      // Status filter
+      const matchesStatus = !statusFilter ||
+        instance.runtimeStatus === statusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [instances, searchQuery, statusFilter]);
+
   const table = useReactTable({
-    data: instances ?? [],
+    data: filteredData,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
