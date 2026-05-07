@@ -11,6 +11,7 @@ import {
   getPaginationRowModel,
   flexRender,
   ColumnDef,
+  SortingState,
 } from '@tanstack/react-table';
 import { useApi } from '../../hooks/useApi';
 import { AgentRun } from '../../types/admin';
@@ -55,7 +56,7 @@ export function AgentRunTable() {
   const { data: agentRuns, loading, error } = useApi<AgentRun[]>('/api/agent-runs');
 
   // Sorting state
-  const [sorting, setSorting] = useState<ColumnDef<AgentRun>[]>([]);
+  const [sorting, setSorting] = useState<SortingState>([]);
 
   // Pagination state
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 10 });
