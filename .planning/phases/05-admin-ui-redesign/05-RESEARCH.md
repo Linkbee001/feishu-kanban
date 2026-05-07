@@ -511,17 +511,19 @@ export function FilterBar({ onSearchChange, onStatusChange, onRefresh }: FilterB
 
 **Recommendation for A2:** Verify dataset size by querying `/api/admin/robot-instances` in test environment. If >50 items, implement backend filtering early.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should backend API support pagination/filter params?**
    - What we know: Current API returns all data. TanStack Table can paginate client-side.
    - What's unclear: Whether dataset will grow beyond 100 items in production.
    - Recommendation: Start with client-side pagination (simpler). Add backend params if dataset grows or performance degrades.
+   - **RESOLVED:** Start with client-side pagination (no backend API changes). Implement backend params only if dataset exceeds 100 items.
 
 2. **Should Sidebar use table view or keep card view?**
    - What we know: CONTEXT.md focuses on "Admin Dashboard" main view. Sidebar is existing card-based instance list.
    - What's unclear: Whether Sidebar should also convert to table or remain as-is.
    - Recommendation: Keep Sidebar as card view for quick instance selection. Main dashboard shows table view.
+   - **RESOLVED:** Keep Sidebar as card view. Only Dashboard main view uses table layout.
 
 ## Environment Availability
 
