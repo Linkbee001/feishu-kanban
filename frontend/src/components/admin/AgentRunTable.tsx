@@ -17,6 +17,8 @@ import { useApi } from '../../hooks/useApi';
 import { AgentRun } from '../../types/admin';
 import { StatusLabel } from './StatusLabel';
 import { PaginationControls } from './PaginationControls';
+import { ConfirmDialog } from './ConfirmDialog';
+import { apiDelete } from '../../hooks/useApi';
 
 /**
  * Column definitions for AgentRun table
@@ -41,6 +43,34 @@ const columns: ColumnDef<AgentRun>[] = [
     accessorKey: 'createdAt',
     header: 'Created At',
     cell: ({ row }) => new Date(row.original.createdAt).toLocaleString('zh-CN'),
+  },
+  {
+    id: 'actions',
+    header: '',
+    cell: ({ row }) => (
+      <div className="flex gap-2">
+        {/* Cancel button for running runs */}
+        {row.original.status === 'running' && (
+          <ConfirmDialog
+            title="确认取消"
+            description={`取消 Agent Run ${row.original.id}，正在执行的任务将中断。`}
+            confirmVariant="danger"
+            onConfirm={() => apiDelete(`/api/agent-runs/${row.original.id}/cancel`)}
+          >
+            <button className="px-3 py-1 rounded bg-danger/10 text-danger text-sm hover:bg-danger/20">
+              取消
+            </button>
+          </ConfirmDialog>
+        )}
+        {/* View details button */}
+        <button
+          className="px-3 py-1 rounded border border-gray-200 text-sm hover:bg-primary/10"
+          onClick={() => {/* TODO: navigate to detail view */}}
+        >
+          详情
+        </button>
+      </div>
+    ),
   },
 ];
 
