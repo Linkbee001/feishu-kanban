@@ -1,6 +1,57 @@
 @import "tailwindcss";
 
+@theme inline {
+  --color-primary: #1d6b57;
+  --color-warning: #aa5a22;
+  --color-danger: #9a2f2f;
+  --color-panel: #f5efe6;
+  --color-ink: #17212a;
+  --color-muted: #6b7780;
+}
+
 /* Base styles matching existing admin console */
 body {
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
+
+/* Custom color utility classes */
+.bg-primary { background-color: #1d6b57; }
+.bg-primary\/10 { background-color: rgba(29, 107, 87, 0.1); }
+.bg-primary\/20 { background-color: rgba(29, 107, 87, 0.2); }
+.bg-primary\/80 { background-color: rgba(29, 107, 87, 0.8); }
+.text-primary { color: #1d6b57; }
+.border-primary { border-color: #1d6b57; }
+.border-primary\/20 { border-color: rgba(29, 107, 87, 0.2); }
+.border-primary\/30 { border-color: rgba(29, 107, 87, 0.3); }
+
+.bg-warning { background-color: #aa5a22; }
+.text-warning { color: #aa5a22; }
+.border-warning { border-color: #aa5a22; }
+
+.bg-danger { background-color: #9a2f2f; }
+.text-danger { color: #9a2f2f; }
+.border-danger { border-color: #9a2f2f; }
+
+.bg-panel { background-color: #f5efe6; }
+.text-panel { color: #f5efe6; }
+
+.text-ink { color: #17212a; }
+.border-ink { border-color: #17212a; }
+
+.text-muted { color: #6b7780; }
+.border-muted { border-color: #6b7780; }
+
+.from-primary\/10 { --tw-gradient-from: rgba(29, 107, 87, 0.1) var(--tw-gradient-from-position); }
+.to-primary\/20 { --tw-gradient-to: rgba(29, 107, 87, 0.2) var(--tw-gradient-to-position); }
+
+/* Status-specific utility classes for D-02 */
+.bg-status-queued { background-color: rgba(107, 119, 128, 0.2); }
+.text-status-queued { color: #6b7780; }
+.bg-status-running { background-color: rgba(29, 107, 87, 0.2); }
+.text-status-running { color: #1d6b57; }
+.bg-status-syncing { background-color: rgba(170, 90, 34, 0.2); }
+.text-status-syncing { color: #aa5a22; }
+.bg-status-succeeded { background-color: rgba(29, 107, 87, 0.1); }
+.text-status-succeeded { color: #1d6b57; }
+.bg-status-failed { background-color: rgba(154, 47, 47, 0.2); }
+.text-status-failed { color: #9a2f2f; }
