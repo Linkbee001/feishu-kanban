@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { createE2eTestModule } from './setup/e2e-test.module';
 import { E2eTestFixture } from './setup/e2e-test.fixture';
-import { PrismaService } from '../src/common/prisma/prisma.service';
+import { PrismaService } from '../../src/common/prisma/prisma.service';
 
 describe('Agent Run Flow E2E', () => {
   let app: INestApplication;
@@ -27,7 +27,32 @@ describe('Agent Run Flow E2E', () => {
       .post(`/api/group-config/${testChatId}/complete`)
       .send({
         ownerOpenId: 'ou_test_user',
-        configMarkdown: '# PROJECT-CONFIG\nTest configuration',
+        configMarkdown: `## Project
+- Name: E2E Test Project
+- Description: Automated E2E testing project
+- Status: active
+
+## Environment
+- Name: Test Environment
+- Repo URL: https://github.com/test/test.git
+- Repo Branch: main
+- Model Name: test-model
+
+## Members
+| Name | OpenID | Role |
+|------|--------|------|
+| Test User | ou_test_user | owner |
+
+## Policy
+- Enabled: true
+- Mention Only: false
+- Default Environment ID: test
+
+## Skills
+- Test skill
+
+## Memory
+Test memory`,
       })
       .expect(201);
 
