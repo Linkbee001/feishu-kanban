@@ -15,6 +15,7 @@ import {
 import { useApi } from '../../hooks/useApi';
 import { RobotInstance } from '../../types/admin';
 import { StatusLabel } from './StatusLabel';
+import { RowActionButtons } from './RowActionButtons';
 
 /**
  * Column definitions for RobotInstance table
@@ -33,6 +34,18 @@ const columns: ColumnDef<RobotInstance>[] = [
     accessorKey: 'runtimeStatus',
     header: 'Status',
     cell: ({ row }) => <StatusLabel status={row.original.runtimeStatus} />,
+  },
+  {
+    id: 'actions',
+    header: '',
+    cell: ({ row }) => (
+      <RowActionButtons
+        chatId={row.original.chatId}
+        projectName={row.original.projectName}
+        onViewLogs={() => {/* TODO: implement navigation */}}
+        onConfigureProject={() => {/* TODO: implement navigation */}}
+      />
+    ),
   },
 ];
 
