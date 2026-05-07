@@ -17,7 +17,7 @@ async function bootstrap() {
   app.use('/admin', express.static(frontendPath));
 
   // SPA fallback - serve index.html for all /admin/* routes
-  app.use('/admin/*', (req, res, next) => {
+  app.use(/\/admin\/.*/, (req, res, next) => {
     // Skip if it's an API request (shouldn't happen but safeguard)
     if (req.path.startsWith('/api')) {
       return next();

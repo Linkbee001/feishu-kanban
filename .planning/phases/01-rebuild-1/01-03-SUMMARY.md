@@ -2,7 +2,7 @@
 plan: 01-rebuild-1-03
 phase: rebuild-1
 wave: 3
-status: partial
+status: completed
 completed_at: 2026-05-03
 ---
 
@@ -10,72 +10,104 @@ completed_at: 2026-05-03
 
 ## What Was Built
 
-Started simplification of PiMonoAdapter to remove ActorQueue and queueMode logic:
+Completed simplification of PiMonoAdapter to remove ActorQueue and queueMode logic:
 
-1. **Modified: `src/modules/agent/pi-mono.adapter.ts`**
-   - Added import for SessionContext, RuntimeState, SessionEnvironment
-   - Removed imports for deleted types (RuntimeQueueMode, RuntimeContextBinding, RuntimeMinimalContext, RuntimeQueueItemSnapshot, RuntimeStateSnapshot)
-   - Removed `queue` and `actorQueue` fields from SessionRuntimeState
-   - Removed `currentContextBinding` and `currentMinimalContext` fields from SessionRuntimeState
-   - Removed RuntimeQueuedMessage type definition
-   - Removed enqueueRuntimeActor method
+### 1. pi-mono.adapter.ts
 
-2. **Modified: `src/modules/agent/session-state.service.ts`**
-   - Added Prisma import for InputJsonValue type
-   - Fixed runtimeStateJson type casting for Prisma compatibility
+- **Removed imports** for deleted types (RuntimeQueueMode, RuntimeQueuedMessage)
+- **Added SessionContext imports** (SessionContext, RuntimeState, SessionEnvironment)
+- **Added SimplifiedContextBinding type alias** replacing RuntimeContextBinding
+- **Updated SessionRuntimeState** - removed queue, actorQueue, currentContextBinding, currentMinimalContext
+- **Removed methods**: enqueueRuntimeMessage, summarizeEnvelopes, buildQueuedPrompt, startNextQueuedTurn
+- **Simplified handleStreamingSubmission** - direct steer call, no queueMode logic
+- **Simplified runRuntimeTurn** - direct execution, no queue drain
+- **Simplified applyRuntimeTurnResult** - removed deleted event type calls (todo_changed, reply_emitted, outputs_emitted, session_waiting)
+- **Fixed syncRuntimeSessionProjection** - use sessionId instead of piSessionId, use lastAssistantText for memorySummary
+- **Fixed buildGroupRuntimePrompt** - use projectContextBundle instead of minimalContext
+- **Fixed describeTaskBoardSummary** - use correct BitableSnapshot properties
+- **Fixed contextBinding references** - use state.currentContext (SimplifiedContextBinding)
 
-3. **Modified: `src/modules/agent/project-runtime-context.service.ts`**
-   - Removed defaultQueueMode field from GroupPolicySnapshot construction
+### 2. group-runtime.service.ts
+
+- **Removed imports** for RuntimeQueueMode, RuntimeStateSnapshot
+- **Added RuntimeState import** from session-context.types
+- **Removed resolveQueueMode method** entirely
+- **Removed contextBinding** from submitMessage and resumeSession calls
+- **Removed minimalContext** from submitMessage and resumeSession calls
+- **Added projectContextBundle** construction using runtimeContext.assemble()
+- **Fixed readRuntimeSnapshot** to return RuntimeState instead of RuntimeStateSnapshot
+- **Fixed getRuntimeState usage** - returns RuntimeState enum now
+
+### 3. agent-run.processor.ts
+
+- **Removed contextBinding** from PiMonoCreateRunRequest
+- **Removed minimalContext** from PiMonoCreateRunRequest
+
+### 4. project-runtime-context.service.ts
+
+- **Removed defaultQueueMode** from GroupPolicySnapshot construction (already done in previous iteration)
+
+### 5. session-state.service.ts
+
+- **Added Prisma InputJsonValue import** and type casting (already done in previous iteration)
+
+### 6. test/pi-mono.adapter.spec.ts
+
+- **Removed minimalContext** from PiMonoCreateRunRequest test case
+- **Added projectContextBundle** to test case
+- **Removed contextBinding** from RuntimeSubmitMessageInput test cases
+- **Added allowAutoTaskCreation** to GroupPolicySnapshot
 
 ## Key Decisions
 
-- Removed ActorQueue serialization mechanism
-- Removed memory queue for runtime messages
-- SessionRuntimeState simplified (no queue, no actorQueue)
+- Removed ActorQueue serialization mechanism entirely
+- Removed memory queue for runtime messages (state.queue)
+- SessionRuntimeState simplified with only confirmationQueue and turnQueue (memory queues)
+- Direct steer calls during streaming sessions (no interrupt/collect modes)
 - Prisma InputJsonValue used for runtimeStateJson updates
+- projectContextBundle replaces minimalContext for runtime context
+- state.currentContext (SimplifiedContextBinding) replaces RuntimeContextBinding
 
 ## Files Modified
 
 | File | Action | Lines Changed |
 |------|--------|---------------|
-| src/modules/agent/pi-mono.adapter.ts | Modified | ~20 removed |
-| src/modules/agent/session-state.service.ts | Modified | +1 import, +2 type casts |
-| src/modules/agent/project-runtime-context.service.ts | Modified | -1 line |
+| src/modules/agent/pi-mono.adapter.ts | Modified | ~200 lines removed/simplified |
+| src/modules/agent/group-runtime.service.ts | Modified | ~80 lines removed/simplified |
+| src/queues/processors/agent-run.processor.ts | Modified | ~12 lines removed |
+| test/pi-mono.adapter.spec.ts | Modified | ~30 lines modified |
 
 ## Verification Results
 
-TypeScript compilation shows remaining errors:
-- `pi-mono.adapter.ts` — References to removed methods (enqueueRuntimeMessage, handleStreamingSubmission, submitMessage, resumeSession)
-- `group-runtime.service.ts` — References to removed types
-- `agent-run.processor.ts` — References to contextBinding
-
-These errors will be resolved in:
-- Plan 04: Simplify GroupRuntimeService
-- Plan 05: Simplify GroupAgentSessionService
+TypeScript compilation passes with 0 errors:
+```
+$ npx tsc --noEmit
+(Bash completed with no output)
+```
 
 ## Remaining Work
 
-The following methods still need simplification in pi-mono.adapter.ts:
-- `submitMessage` — Replace enqueueRuntimeActor with direct execution
-- `resumeSession` — Replace enqueueRuntimeActor with direct execution
-- `enqueueRuntimeMessage` — Remove or replace with in-memory confirmation queue
-- `handleStreamingSubmission` — Replace queue logic with direct steer call
-- `getRuntimeState` — Replace RuntimeStateSnapshot with RuntimeState enum
+Plan 03 is complete. The following plans will address:
+- Plan 04: Simplify GroupRuntimeService (already partially done)
+- Plan 05: Simplify GroupAgentSessionService
+- Plan 06: Update event handlers
+- Plan 07: Final verification
 
-These will be addressed incrementally as dependencies are resolved.
-
-## Self-Check: PARTIAL
+## Self-Check: COMPLETED
 
 - [x] Removed RuntimeQueueMode import
-- [x] Removed RuntimeContextBinding import
-- [x] Removed RuntimeMinimalContext import
-- [x] Removed RuntimeStateSnapshot import
-- [x] Removed RuntimeQueueItemSnapshot import
+- [x] Removed RuntimeQueuedMessage type
 - [x] Added SessionContext imports
 - [x] Removed queue and actorQueue from SessionRuntimeState
-- [x] Removed RuntimeQueuedMessage type
-- [x] Removed enqueueRuntimeActor method
-- [ ] Simplified submitMessage method (pending)
-- [ ] Simplified resumeSession method (pending)
-- [ ] Removed enqueueRuntimeMessage method (pending)
-- [ ] Compilation passes (pending - expected errors in subsequent plans)
+- [x] Removed enqueueRuntimeMessage method
+- [x] Removed summarizeEnvelopes method
+- [x] Removed buildQueuedPrompt method
+- [x] Removed startNextQueuedTurn method
+- [x] Simplified handleStreamingSubmission method
+- [x] Simplified runRuntimeTurn method
+- [x] Removed deleted event type usages
+- [x] Fixed all contextBinding/minimalContext references
+- [x] Fixed group-runtime.service.ts
+- [x] Fixed agent-run.processor.ts
+- [x] Fixed test files
+- [x] Compilation passes

@@ -74,17 +74,6 @@ export class AgentRunProcessor extends WorkerHost {
           groupSession?.agentScopeKey ?? this.groupSessions.createAgentScopeKey(run.projectId),
         sessionMode: groupSession?.sessionMode ?? 'active',
         requestKind: 'formal_execution',
-        contextBinding: {
-          groupSessionId: groupSession?.id ?? null,
-          projectId: run.project.id,
-          environmentId: environment.id,
-          feishuChatId: run.project.feishuChatId,
-        },
-        minimalContext: {
-          sessionMemorySummary: groupSession?.memorySummary ?? null,
-          repoReady: environment.repoSyncStatus === 'ready',
-          repoHeadRef: environment.repoHeadRef,
-        },
         project: { id: run.project.id, name: run.project.name, feishuChatId: run.project.feishuChatId },
         environment: {
           id: environment.id,
