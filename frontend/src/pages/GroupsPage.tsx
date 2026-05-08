@@ -3,12 +3,14 @@
  * Group management page with DataTable, filtering, and pagination
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { ColumnDef, SortingState } from '@tanstack/react-table';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, Search, RefreshCw, MoreHorizontal, Settings, MessageSquare, Unlink } from 'lucide-react';
 import { DataTable, Pagination } from '../components/data-table';
 import { StatusBadge } from '../components/admin/StatusBadge';
+import { ConfirmDialog } from '../components/admin/ConfirmDialog';
+import { GroupConfigDrawer } from '../components/drawer';
 import { useGroups } from '../hooks/useGroups';
 import { GroupListItem, GroupStatus } from '../types/dashboard';
 
@@ -21,16 +23,37 @@ const STATUS_OPTIONS: { value: GroupStatus | ''; label: string }[] = [
 
 export function GroupsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<GroupStatus | ''>('');
   const [sorting, setSorting] = useState<SortingState>([]);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
+  // URL-based drawer state
+  const drawerOpen = searchParams.get('drawer') === 'group-config';
+  const drawerChatId = searchParams.get('chatId') || null;
+
   const { groups, total, loading, error, refetch, setParams } = useGroups({
     page,
     limit,
   });
+
+  // Open drawer by setting URL params
+  const openDrawer = useCallback((chatId: string) => {
+    setSearchParams({ drawer: 'group-config', chatId });
+  }, [setSearchParams]);
+
+  // Close drawer by clearing URL params
+  const closeDrawer = useCallback(() => {
+    setSearchParams({});
+  }, [setSearchParams]);
+
+  // Handle drawer saved - refresh table and close
+  const handleDrawerSaved = useCallback(() => {
+    refetch();
+    closeDrawer();
+  }, [refetch, closeDrawer]);
 
   // Apply filters
   const filteredGroups = useMemo(() => {
@@ -77,17 +100,15 @@ export function GroupsPage() {
 
   // Row actions
   const handleConfigure = useCallback((chatId: string) => {
-    // TODO: Open drawer in Wave 3
-    console.log('Configure group:', chatId);
-  }, []);
+    openDrawer(chatId);
+  }, [openDrawer]);
 
   const handleViewMessages = useCallback((chatId: string) => {
     navigate(`/admin/messages?group=${encodeURIComponent(chatId)}`);
   }, [navigate]);
 
   const handleUnbind = useCallback((chatId: string, name: string) => {
-    // TODO: Show confirm dialog and call API
-    console.log('Unbind group:', chatId, name);
+    // Unbind is handled via ConfirmDialog in RowActions
   }, []);
 
   // Table columns
@@ -227,6 +248,16 @@ export function GroupsPage() {
           onLimitChange={handleLimitChange}
         />
       )}
+
+      {/* Group Config Drawer */}
+      <GroupConfigDrawer
+        chatId={drawerChatId}
+        open={drawerOpen}
+        onOpenChange={(open) => {
+          if (!open) closeDrawer();
+        }}
+        onSaved={handleDrawerSaved}
+      />
     </div>
   );
 }
@@ -241,6 +272,11 @@ interface RowActionsProps {
 
 function RowActions({ group, onConfigure, onViewMessages, onUnbind }: RowActionsProps) {
   const [isOpen, setIsOpen] = useState(false);
+
+  const handleUnbindClick = () => {
+    setIsOpen(false);
+    onUnbind(group.chatId, group.name);
+  };
 
   return (
     <div className="relative">
@@ -281,16 +317,21 @@ function RowActions({ group, onConfigure, onViewMessages, onUnbind }: RowActions
               查看消息
             </button>
             <div className="border-t border-gray-100 my-1" />
-            <button
-              onClick={() => {
-                onUnbind(group.chatId, group.name);
-                setIsOpen(false);
-              }}
-              className="w-full flex items-center gap-2 px-4 py-2 text-sm text-danger hover:bg-danger/5 transition-colors"
+            <ConfirmDialog
+              title="解绑群"
+              description={`确定要解绑群"${group.name}"吗？解绑后机器人将不再响应此群消息。`}
+              onConfirm={handleUnbindClick}
+              confirmText="解绑"
+              cancelText="取消"
+              confirmVariant="danger"
             >
-              <Unlink className="w-4 h-4" />
-              解绑
-            </button>
+              <button
+                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-danger hover:bg-danger/5 transition-colors"
+              >
+                <Unlink className="w-4 h-4" />
+                解绑
+              </button>
+            </ConfirmDialog>
           </div>
         </>
       )}
