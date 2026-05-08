@@ -527,6 +527,170 @@ export class AdminService {
   }
 
   /**
+   * List messages with pagination and filtering
+   * Returns combined user messages (from MessageSource) and bot responses (from AgentRun outputSummary)
+   */
+  async listMessages(options: {
+    group?: string;
+    startDate?: string;
+    endDate?: string;
+    type?: 'all' | 'user' | 'bot';
+    page: number;
+    limit: number;
+  }) {
+    const { group, startDate, endDate, type, page, limit } = options;
+    const skip = (page - 1) * limit;
+
+    // Build where clause for MessageSource
+    const messageWhere: any = {};
+    if (group) {
+      messageWhere.feishuChatId = group;
+    }
+    if (startDate) {
+      messageWhere.receivedAt = { ...messageWhere.receivedAt, gte: new Date(startDate) };
+    }
+    if (endDate) {
+      messageWhere.receivedAt = { ...messageWhere.receivedAt, lte: new Date(endDate) };
+    }
+
+    // Fetch user messages from MessageSource
+    const userMessages = type === 'bot' ? [] : await this.prisma.messageSource.findMany({
+      where: messageWhere,
+      orderBy: { receivedAt: 'asc' }, // Oldest first for chat view
+    });
+
+    // Fetch sender names from ProjectMemberProfile
+    const senderProfiles = await this.prisma.projectMemberProfile.findMany({
+      where: group ? { feishuChatId: group } : {},
+      select: { openId: true, displayName: true, groupNickname: true },
+    });
+
+    // Build sender name lookup
+    const senderNames: Record<string, string> = {};
+    for (const profile of senderProfiles) {
+      senderNames[profile.openId] = profile.groupNickname || profile.displayName;
+    }
+
+    // Map user messages to response format
+    const userItems = userMessages.map((msg) => ({
+      id: msg.id,
+      feishuMessageId: msg.feishuMessageId,
+      feishuChatId: msg.feishuChatId,
+      senderOpenId: msg.senderOpenId,
+      senderName: senderNames[msg.senderOpenId] || '未知用户',
+      rawText: msg.rawText,
+      isBotMentioned: msg.isBotMentioned,
+      receivedAt: msg.receivedAt.toISOString(),
+      senderType: 'user' as const,
+      agentRunId: null,
+    }));
+
+    // Fetch bot responses from AgentRun (linked via messageSourceId)
+    // Bot messages are derived from AgentRun.outputSummary for runs triggered by messages
+    const botMessages =
+      type === 'user'
+        ? []
+        : await this.prisma.agentRun.findMany({
+            where: {
+              messageSourceId: { in: userMessages.map((m) => m.id) },
+              outputSummary: { not: null },
+            },
+            include: { messageSource: true },
+            orderBy: { createdAt: 'asc' },
+          });
+
+    // Map bot messages to response format
+    const botItems = botMessages
+      .filter((run) => run.outputSummary && run.messageSource)
+      .map((run) => ({
+        id: `run-${run.id}`,
+        feishuMessageId: run.messageSource?.feishuMessageId ?? '',
+        feishuChatId: run.messageSource?.feishuChatId ?? '',
+        senderOpenId: 'bot',
+        senderName: '机器人',
+        rawText: run.outputSummary ?? '',
+        isBotMentioned: false,
+        receivedAt: run.finishedAt?.toISOString() ?? run.createdAt.toISOString(),
+        senderType: 'bot' as const,
+        agentRunId: run.id,
+      }));
+
+    // Combine and sort by timestamp (oldest first)
+    const allItems = [...userItems, ...botItems].sort(
+      (a, b) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime()
+    );
+
+    // Apply pagination
+    const total = allItems.length;
+    const paginatedItems = allItems.slice(skip, skip + limit);
+
+    return {
+      items: paginatedItems,
+      total,
+      page,
+      limit,
+    };
+  }
+
+  /**
+   * Get single message by id
+   */
+  async getMessage(id: string) {
+    // Check if it's a bot message (run-{id})
+    if (id.startsWith('run-')) {
+      const runId = id.slice(4);
+      const run = await this.prisma.agentRun.findUnique({
+        where: { id: runId },
+        include: { messageSource: true },
+      });
+      if (!run) {
+        throw new NotFoundException('Message not found');
+      }
+      return {
+        id: `run-${run.id}`,
+        feishuMessageId: run.messageSource?.feishuMessageId ?? '',
+        feishuChatId: run.messageSource?.feishuChatId ?? '',
+        senderOpenId: 'bot',
+        senderName: '机器人',
+        rawText: run.outputSummary ?? '',
+        isBotMentioned: false,
+        receivedAt: run.finishedAt?.toISOString() ?? run.createdAt.toISOString(),
+        senderType: 'bot' as const,
+        agentRunId: run.id,
+      };
+    }
+
+    // User message
+    const msg = await this.prisma.messageSource.findUnique({
+      where: { id },
+    });
+    if (!msg) {
+      throw new NotFoundException('Message not found');
+    }
+
+    // Get sender name
+    const profile = await this.prisma.projectMemberProfile.findFirst({
+      where: { feishuChatId: msg.feishuChatId, openId: msg.senderOpenId },
+      select: { displayName: true, groupNickname: true },
+    });
+
+    const senderName = profile?.groupNickname || profile?.displayName || '未知用户';
+
+    return {
+      id: msg.id,
+      feishuMessageId: msg.feishuMessageId,
+      feishuChatId: msg.feishuChatId,
+      senderOpenId: msg.senderOpenId,
+      senderName,
+      rawText: msg.rawText,
+      isBotMentioned: msg.isBotMentioned,
+      receivedAt: msg.receivedAt.toISOString(),
+      senderType: 'user' as const,
+      agentRunId: null,
+    };
+  }
+
+  /**
    * List runs with pagination and filtering
    */
   async listRuns(options: { group?: string; status?: string; page: number; limit: number }) {
