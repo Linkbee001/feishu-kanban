@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Outlet } from 'react-router';
+import { Outlet, useLocation } from 'react-router';
 import { Menu, X } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 
@@ -19,12 +19,21 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
+// Scroll to top hook on route change
+function useScrollToTop() {
+  const location = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
+}
+
 export function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const isMobile = useMediaQuery('(max-width: 1024px)');
+  useScrollToTop();
 
   // Close sidebar when switching to desktop mode
-  useEffect(() {
+  useEffect(() => {
     if (!isMobile && sidebarOpen) {
       setSidebarOpen(false);
     }

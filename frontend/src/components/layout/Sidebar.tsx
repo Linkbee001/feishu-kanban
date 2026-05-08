@@ -69,7 +69,7 @@ export function Sidebar({ onClose, isMobile }: SidebarProps) {
 
   return (
     <div className="w-[280px] h-full bg-white border-r border-gray-200 flex flex-col">
-      // Logo */}
+      {/* Logo */}
       <div className="p-6 border-b border-gray-200 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-ink">Feishu Kanban</h1>
