@@ -10,6 +10,7 @@ describe('Agent Run Flow E2E', () => {
   let prisma: PrismaService;
   let testChatId: string;
   let projectId: string;
+  let environmentId: string;
 
   beforeAll(async () => {
     app = await createE2eTestModule();
@@ -57,6 +58,7 @@ Test memory`,
       .expect(201);
 
     projectId = completeRes.body.projectId;
+    environmentId = completeRes.body.environmentId;
   });
 
   afterAll(async () => {
@@ -70,7 +72,7 @@ Test memory`,
         .post('/api/agent-runs')
         .send({
           projectId,
-          environmentId: 'env_test',
+          environmentId,
           prompt: 'Generate project overview',
           intent: 'summary',
           skillName: 'project-analysis',
@@ -96,7 +98,7 @@ Test memory`,
         .post('/api/agent-runs')
         .send({
           projectId,
-          environmentId: 'env_test',
+          environmentId,
         })
         .expect(400);
     });
@@ -110,7 +112,7 @@ Test memory`,
         .post('/api/agent-runs')
         .send({
           projectId,
-          environmentId: 'env_test',
+          environmentId,
           prompt: 'Status test',
         })
         .expect(201);
@@ -145,7 +147,7 @@ Test memory`,
         .post('/api/agent-runs')
         .send({
           projectId,
-          environmentId: 'env_test',
+          environmentId,
           prompt: 'Cancel test',
         })
         .expect(201);
@@ -165,7 +167,7 @@ Test memory`,
         .post('/api/agent-runs')
         .send({
           projectId,
-          environmentId: 'env_test',
+          environmentId,
           prompt: 'Quick test',
         })
         .expect(201);
@@ -183,7 +185,7 @@ Test memory`,
         .post('/api/agent-runs')
         .send({
           projectId,
-          environmentId: 'env_test',
+          environmentId,
           prompt: 'Create document',
           intent: 'doc_creation',
         })

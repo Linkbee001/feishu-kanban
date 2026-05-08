@@ -22,6 +22,11 @@ export class AgentController {
     return this.agentService.createRun(body);
   }
 
+  @Get()
+  findAll() {
+    return this.agentService.findAllRuns();
+  }
+
   @Get(':id')
   find(@Param('id') id: string) {
     return this.agentService.findRun(id);

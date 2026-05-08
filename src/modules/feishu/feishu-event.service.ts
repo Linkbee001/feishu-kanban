@@ -278,7 +278,7 @@ export class FeishuEventService {
         await this.feishu.sendTextMessage(
           'chat_id',
           chatId,
-          '本群未完成项目配置，请先在后台完成初始化。配置地址：/api/group-config/' + chatId,
+          '本群未完成项目配置，请先在后台完成初始化。配置地址：/admin',
         );
       }
       return;

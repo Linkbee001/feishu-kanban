@@ -17,7 +17,12 @@ async function bootstrap() {
   const frontendPath = path.join(process.cwd(), 'frontend', 'dist');
 
   // Serve assets at root level for script/stylesheet URLs (e.g., /assets/index.js)
-  app.use('/assets', express.static(path.join(frontendPath, 'assets')));
+  // Add CORS headers for crossorigin attribute support
+  app.use('/assets', express.static(path.join(frontendPath, 'assets'), {
+    setHeaders: (res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+  }));
 
   // Serve remaining frontend files at /admin route
   app.use('/admin', express.static(frontendPath));

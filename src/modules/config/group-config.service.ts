@@ -43,6 +43,7 @@ export class GroupConfigService {
     configMarkdown: string;
   }): Promise<{
     projectId: string;
+    environmentId: string | null;
     configDocToken: string;
     configDocUrl: string;
   }> {
@@ -98,6 +99,7 @@ export class GroupConfigService {
 
     return {
       projectId: project.id,
+      environmentId: project.defaultEnvironmentId,
       configDocToken: doc.token,
       configDocUrl: doc.url ?? this.feishu.documentUrl(doc.token),
     };

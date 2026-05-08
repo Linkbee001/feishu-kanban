@@ -20,39 +20,9 @@ import { RowActionButtons } from './RowActionButtons';
 interface RobotInstanceTableProps {
   searchQuery?: string;
   statusFilter?: string | null;
+  onSelectInstance?: (chatId: string) => void;
 }
 
-/**
- * Column definitions for RobotInstance table
- * Matches D-05 specification: Chat ID, Session Mode, Project Name, Last Active, Status
- */
-const columns: ColumnDef<RobotInstance>[] = [
-  { accessorKey: 'chatId', header: 'Chat ID' },
-  { accessorKey: 'sessionMode', header: 'Session Mode' },
-  { accessorKey: 'projectName', header: 'Project Name' },
-  {
-    accessorKey: 'lastActiveAt',
-    header: 'Last Active',
-    cell: ({ row }) => new Date(row.original.lastActiveAt).toLocaleString('zh-CN'),
-  },
-  {
-    accessorKey: 'runtimeStatus',
-    header: 'Status',
-    cell: ({ row }) => <StatusLabel status={row.original.runtimeStatus} />,
-  },
-  {
-    id: 'actions',
-    header: '',
-    cell: ({ row }) => (
-      <RowActionButtons
-        chatId={row.original.chatId}
-        projectName={row.original.projectName}
-        onViewLogs={() => {/* TODO: implement navigation */}}
-        onConfigureProject={() => {/* TODO: implement navigation */}}
-      />
-    ),
-  },
-];
 
 /**
  * RobotInstanceTable displays robot instance data in a sortable table
@@ -62,11 +32,55 @@ const columns: ColumnDef<RobotInstance>[] = [
  * - Client-side filtering by searchQuery and statusFilter (D-07)
  * - Shows loading and error states
  */
-export function RobotInstanceTable({ searchQuery = '', statusFilter = null }: RobotInstanceTableProps) {
+export function RobotInstanceTable({
+  searchQuery = '',
+  statusFilter = null,
+  onSelectInstance,
+}: RobotInstanceTableProps) {
   const { data: instances, loading, error } = useApi<RobotInstance[]>(
     '/api/admin/robot-instances'
   );
   const [sorting, setSorting] = useState<SortingState>([]);
+
+  // Column definitions - now inside component to access onSelectInstance
+  const columns: ColumnDef<RobotInstance>[] = [
+    {
+      accessorKey: 'chatId',
+      header: 'Chat ID',
+      cell: ({ row }) => (
+        <button
+          onClick={() => onSelectInstance?.(row.original.chatId)}
+          className="text-primary hover:underline font-medium text-left"
+        >
+          {row.original.chatId}
+        </button>
+      ),
+    },
+    { accessorKey: 'sessionMode', header: 'Session Mode' },
+    { accessorKey: 'projectName', header: 'Project Name' },
+    {
+      accessorKey: 'lastActiveAt',
+      header: 'Last Active',
+      cell: ({ row }) => new Date(row.original.lastActiveAt).toLocaleString('zh-CN'),
+    },
+    {
+      accessorKey: 'runtimeStatus',
+      header: 'Status',
+      cell: ({ row }) => <StatusLabel status={row.original.runtimeStatus} />,
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <RowActionButtons
+          chatId={row.original.chatId}
+          projectName={row.original.projectName}
+          onViewLogs={() => onSelectInstance?.(row.original.chatId)}
+          onConfigureProject={() => {/* TODO: implement navigation */}}
+        />
+      ),
+    },
+  ];
 
   // Client-side filtering (D-07)
   const filteredData = useMemo(() => {

@@ -24,8 +24,31 @@ const mockFeishuService = {
       url: `https://feishu.cn/docx/${token}`,
     });
   }),
+  createTaskBitable: jest.fn().mockImplementation((projectName: string) => {
+    const appToken = 'mock_bitable_' + Date.now();
+    const tableId = 'mock_table_' + Date.now();
+    return Promise.resolve({
+      appToken,
+      tableId,
+      url: `https://feishu.cn/bitable/${appToken}`,
+    });
+  }),
+  grantDrivePermission: jest.fn().mockResolvedValue({ success: true }),
+  createChatTabs: jest.fn().mockImplementation((chatId: string, tabs: Array<{ tabName: string; url: string }> ) => {
+    return Promise.resolve({
+      raw: {},
+      tabs: tabs.map((tab, i) => ({ id: `mock_tab_${i}`, name: tab.tabName, url: tab.url })),
+    });
+  }),
+  sendTextMessage: jest.fn().mockResolvedValue({ message_id: 'mock_msg_id' }),
+  folderUrl: jest.fn().mockImplementation((token: string) => {
+    return `https://feishu.cn/drive/folders/${token}`;
+  }),
+  bitableUrl: jest.fn().mockImplementation((appToken: string, tableId?: string) => {
+    return `https://feishu.cn/bitable/${appToken}`;
+  }),
   listChatMembers: jest.fn().mockResolvedValue([
-    { open_id: 'ou_test_user', name: 'Test User', member_type: 'user' },
+    { openId: 'ou_test_user', displayName: 'Test User', groupNickname: 'Test User', metadata: {} },
   ]),
   documentUrl: jest.fn().mockImplementation((token: string) => {
     return `https://feishu.cn/docx/${token}`;

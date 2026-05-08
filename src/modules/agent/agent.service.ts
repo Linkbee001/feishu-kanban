@@ -277,6 +277,13 @@ export class AgentService {
     }
   }
 
+  async findAllRuns() {
+    return this.prisma.agentRun.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+  }
+
   async findRun(id: string) {
     const run = await this.prisma.agentRun.findUnique({ where: { id }, include: { artifacts: true } });
     if (!run) throw new NotFoundException('Agent run not found');

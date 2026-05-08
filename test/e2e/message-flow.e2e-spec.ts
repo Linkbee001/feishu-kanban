@@ -10,6 +10,7 @@ describe('Message Processing Flow E2E', () => {
   let prisma: PrismaService;
   let testChatId: string;
   let projectId: string;
+  let environmentId: string;
 
   beforeAll(async () => {
     app = await createE2eTestModule();
@@ -57,6 +58,7 @@ Test memory`,
       .expect(201);
 
     projectId = completeRes.body.projectId;
+    environmentId = completeRes.body.environmentId;
   });
 
   afterAll(async () => {
@@ -83,7 +85,7 @@ Test memory`,
         .post('/api/agent-runs')
         .send({
           projectId,
-          environmentId: 'env_test',
+          environmentId,
           prompt: 'Analyze the project status',
           intent: 'analysis',
         })
@@ -112,7 +114,7 @@ Test memory`,
         .post('/api/agent-runs')
         .send({
           projectId,
-          environmentId: 'env_test',
+          environmentId,
           prompt: 'Generate project summary',
         })
         .expect(201);
