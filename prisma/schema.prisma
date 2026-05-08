@@ -411,3 +411,16 @@ model ProjectMemberProfile {
   @@index([feishuChatId])
   @@map("project_member_profiles")
 }
+
+model SystemSettings {
+  id                  String    @id @default(uuid()) @db.Uuid
+  defaultModel         String    @default("claude-3-5-sonnet") @map("default_model")
+  autoSyncGroups       Boolean   @default(true) @map("auto_sync_groups")
+  messageRetentionDays Int       @default(30) @map("message_retention_days")
+  emailNotifications   Boolean   @default(false) @map("email_notifications")
+  notificationEmail    String?   @map("notification_email")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}

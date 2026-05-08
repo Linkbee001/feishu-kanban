@@ -851,6 +851,204 @@ export class AdminService {
   }
 }
 
+/**
+   * Get dashboard statistics
+   * Returns counts of groups, sessions, messages, and runs
+   */
+  async getDashboardStats() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const [
+      totalGroups,
+      activeSessions,
+      pendingConfig,
+      todayMessages,
+      totalRuns,
+    ] = await Promise.all([
+      this.prisma.groupAgentSession.count(),
+      this.prisma.groupAgentSession.count({
+        where: { sessionMode: 'active' },
+      }),
+      this.prisma.groupAgentSession.count({
+        where: { sessionMode: 'pending_config' },
+      }),
+      this.prisma.messageSource.count({
+        where: { receivedAt: { gte: today } },
+      }),
+      this.prisma.agentRun.count(),
+    ]);
+
+    return {
+      totalGroups,
+      activeSessions,
+      pendingConfig,
+      todayMessages,
+      totalRuns,
+    };
+  }
+
+  /**
+   * Get recent activity for dashboard
+   * Returns last N events across config updates, runs, and group binds
+   */
+  async getRecentActivity(limit: number = 10) {
+    // Fetch recent RuntimeEvents
+    const runtimeEvents = await (this.prisma as any).runtimeEvent.findMany({
+      where: {
+        eventType: { in: ['turn_completed', 'session_state_changed'] },
+      },
+      include: {
+        project: { select: { name: true, feishuChatId: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    // Fetch recent GroupAgentSession changes (config updates)
+    const sessions = await this.prisma.groupAgentSession.findMany({
+      where: {
+        updatedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+      include: { project: { select: { name: true } } },
+      orderBy: { updatedAt: 'desc' },
+      take: limit,
+    });
+
+    // Fetch recent AgentRuns
+    const runs = await this.prisma.agentRun.findMany({
+      where: { status: { in: ['succeeded', 'failed'] } },
+      include: { project: { select: { name: true, feishuChatId: true } } },
+      orderBy: { finishedAt: 'desc' },
+      take: limit,
+    });
+
+    // Combine and format as ActivityItems
+    const activities: any[] = [];
+
+    // Runtime events -> task_complete
+    for (const event of runtimeEvents) {
+      const projectName = event.project?.name ?? '未命名群';
+      activities.push({
+        id: event.id,
+        type: 'task_complete',
+        title: `任务执行${event.payload?.status === 'succeeded' ? '成功' : '失败'}`,
+        description: `${projectName}: ${event.payload?.outputSummary?.slice(0, 50) ?? ''}`,
+        timestamp: event.createdAt.toISOString(),
+        link: event.project?.feishuChatId ? `/admin/runs?group=${event.project.feishuChatId}` : null,
+      });
+    }
+
+    // Sessions with recent updates -> config_update or group_bind
+    for (const session of sessions) {
+      const projectName = session.project?.name ?? '未命名群';
+      if (session.sessionMode === 'active') {
+        activities.push({
+          id: `session-${session.feishuChatId}`,
+          type: 'config_update',
+          title: `群 "${projectName}" 配置更新`,
+          description: '群配置已更新',
+          timestamp: session.updatedAt.toISOString(),
+          link: `/admin/groups?drawer=group-config&chatId=${session.feishuChatId}`,
+        });
+      } else if (session.sessionMode === 'pending_config') {
+        activities.push({
+          id: `session-${session.feishuChatId}`,
+          type: 'group_bind',
+          title: `新群 "${projectName}" 待配置`,
+          description: '机器人已加入，等待配置',
+          timestamp: session.updatedAt.toISOString(),
+          link: `/admin/groups?drawer=group-config&chatId=${session.feishuChatId}`,
+        });
+      }
+    }
+
+    // Runs -> task_complete with more detail
+    for (const run of runs) {
+      if (!activities.find((a) => a.id === `run-${run.id}`)) {
+        const projectName = run.project?.name ?? '未命名群';
+        activities.push({
+          id: `run-${run.id}`,
+          type: 'task_complete',
+          title: `任务执行${run.status === 'succeeded' ? '成功' : '失败'}`,
+          description: `${projectName}: ${run.intent?.slice(0, 50) ?? ''}`,
+          timestamp: (run.finishedAt ?? run.createdAt).toISOString(),
+          link: `/admin/runs?runId=${run.id}`,
+        });
+      }
+    }
+
+    // Sort by timestamp and limit
+    const sorted = activities
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, limit);
+
+    return sorted;
+  }
+
+  /**
+   * Get system settings
+   * Returns stored settings from database (stored in Project or a dedicated Settings table)
+   * For now, returns default values since no dedicated settings storage exists
+   */
+  async getSettings() {
+    // Check if we have a system-wide settings storage
+    // Currently using default values; could be stored in a dedicated SystemSettings table
+    const systemSettings = await this.prisma.systemSettings.findFirst();
+
+    if (systemSettings) {
+      return {
+        defaultModel: systemSettings.defaultModel ?? 'claude-3-5-sonnet',
+        autoSyncGroups: systemSettings.autoSyncGroups ?? true,
+        messageRetentionDays: systemSettings.messageRetentionDays ?? 30,
+        emailNotifications: systemSettings.emailNotifications ?? false,
+        notificationEmail: systemSettings.notificationEmail ?? '',
+      };
+    }
+
+    // Return defaults if no settings stored
+    return {
+      defaultModel: 'claude-3-5-sonnet',
+      autoSyncGroups: true,
+      messageRetentionDays: 30,
+      emailNotifications: false,
+      notificationEmail: '',
+    };
+  }
+
+  /**
+   * Update system settings
+   * Creates or updates the SystemSettings record
+   */
+  async updateSettings(settings: {
+    defaultModel?: string;
+    autoSyncGroups?: boolean;
+    messageRetentionDays?: number;
+    emailNotifications?: boolean;
+    notificationEmail?: string;
+  }) {
+    // Upsert system settings
+    const existing = await this.prisma.systemSettings.findFirst();
+
+    if (existing) {
+      return this.prisma.systemSettings.update({
+        where: { id: existing.id },
+        data: settings,
+      });
+    }
+
+    return this.prisma.systemSettings.create({
+      data: {
+        defaultModel: settings.defaultModel ?? 'claude-3-5-sonnet',
+        autoSyncGroups: settings.autoSyncGroups ?? true,
+        messageRetentionDays: settings.messageRetentionDays ?? 30,
+        emailNotifications: settings.emailNotifications ?? false,
+        notificationEmail: settings.notificationEmail ?? '',
+      },
+    });
+  }
+}
+
 function emptyCounts() {
   return {
     queued: 0,

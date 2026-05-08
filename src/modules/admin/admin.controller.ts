@@ -149,4 +149,25 @@ export class AdminController {
   getRunLogs(@Param('id') id: string) {
     return this.admin.getRunLogs(id);
   }
+
+  @Get('api/admin/dashboard/stats')
+  getDashboardStats() {
+    return this.admin.getDashboardStats();
+  }
+
+  @Get('api/admin/dashboard/activity')
+  getRecentActivity(@Query('limit') limit?: string) {
+    return this.admin.getRecentActivity(limit ? parseInt(limit, 10) : 10);
+  }
+
+  @Get('api/admin/settings')
+  getSettings() {
+    return this.admin.getSettings();
+  }
+
+  @Post('api/admin/settings')
+  @HttpCode(200)
+  updateSettings(@Body() settings: any) {
+    return this.admin.updateSettings(settings);
+  }
 }
