@@ -33,7 +33,9 @@ result: [pending]
 
 ### 3. D-03 Group Info Sync
 expected: Enter chatId, click sync, see group name/member count/owner displayed; project name pre-filled
-result: [pending]
+result: issue
+reported: "填入群ID，点击同步，Uncaught TypeError: Cannot read properties of undefined (reading 'slice')"
+severity: major
 
 ### 4. D-04 Validation & Errors
 expected: Frontend validation (required fields, URL format); backend errors displayed clearly; loading states
