@@ -4,19 +4,19 @@ import { GroupInfo, GroupConfigForm } from '../types/group-config';
 function generateConfigMarkdown(form: GroupConfigForm): string {
   return `# PROJECT-CONFIG
 
-## Basic
-- project.name: ${form.projectName}
-- project.description: ${form.description || 'N/A'}
+## Project
+- Name: ${form.projectName}
+- Description: ${form.description || 'N/A'}
 
 ## Environment
-- repo.url: ${form.repoUrl || 'N/A'}
-- repo.branch: ${form.repoBranch || 'main'}
-- model.name: ${form.modelName || 'default'}
+- Name: 默认主环境
+- Repo URL: ${form.repoUrl || 'N/A'}
+- Branch: ${form.repoBranch || 'main'}
+- Model: ${form.modelName || 'default'}
 
 ## Policy
-- mentionOnly: ${form.mentionOnly}
-- allowedSkills: ${form.allowedSkills.join(', ') || 'all'}
-- enabled: ${form.enabled}`;
+- Enabled: ${form.enabled}
+- Mention Only: ${form.mentionOnly}`;
 }
 
 async function parseApiError(response: Response): Promise<string> {

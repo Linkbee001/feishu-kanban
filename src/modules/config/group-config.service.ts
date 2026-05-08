@@ -45,6 +45,11 @@ export class GroupConfigService {
     // Use first member as owner (since we can't determine admin from basic member list)
     const owner = members[0];
 
+    // Validate that we have at least one member
+    if (!owner) {
+      throw new BadRequestException('群成员列表为空，无法确定群管理员');
+    }
+
     // Create or get session
     await this.groupSessions.getOrCreateSession(input.feishuChatId, {
       feishuChatId: input.feishuChatId,

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { AdminAuthGuard } from '../../common/auth/admin-auth.guard';
 import { GroupConfigService } from './group-config.service';
 
@@ -35,10 +35,10 @@ export class GroupConfigController {
     @Body() body: { ownerOpenId: string; configMarkdown: string },
   ) {
     if (!body.ownerOpenId?.trim()) {
-      throw new Error('ownerOpenId is required');
+      throw new BadRequestException('ownerOpenId is required');
     }
     if (!body.configMarkdown?.trim()) {
-      throw new Error('configMarkdown is required');
+      throw new BadRequestException('configMarkdown is required');
     }
 
     return this.groupConfig.completeConfig({
