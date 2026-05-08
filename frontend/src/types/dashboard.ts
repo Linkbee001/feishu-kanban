@@ -29,21 +29,35 @@ export interface GroupsQueryParams {
 }
 
 // Message types
-export interface MessageItem {
+export type MessageType = 'all' | 'user' | 'bot';
+
+export interface MessageListItem {
   id: string;
-  chatId: string;
+  feishuMessageId: string;
+  feishuChatId: string;
+  senderOpenId: string;
   senderName: string;
+  rawText: string;
+  isBotMentioned: boolean;
+  receivedAt: string;
   senderType: 'user' | 'bot';
-  content: string;
-  createdAt: string;
-  runId?: string;
+  agentRunId?: string | null;
 }
 
 export interface MessagesResponse {
-  items: MessageItem[];
+  items: MessageListItem[];
   total: number;
   page: number;
   limit: number;
+}
+
+export interface MessagesQueryParams {
+  group?: string;
+  startDate?: string;
+  endDate?: string;
+  type?: MessageType;
+  page?: number;
+  limit?: number;
 }
 
 // Run/Log types
