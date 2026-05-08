@@ -35,7 +35,7 @@
 - [ ] Verification
 - [ ] UAT
 
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 - [x] 05-01-PLAN.md — Wave 0: E2E test infrastructure (admin-ui-redesign.spec.ts, frontend-test.fixture.ts)
@@ -43,7 +43,7 @@ Plans:
 - [x] 05-03-PLAN.md — Wave 1: Robot Instance table component (D-02, D-05, D-08)
 - [x] 05-04-PLAN.md — Wave 1: Agent Run table component with pagination (D-06, D-08)
 - [x] 05-05-PLAN.md — Wave 2: Modal components + action buttons (D-01, D-03)
-- [ ] 05-06-PLAN.md — Wave 3: Dashboard integration + test execution (D-04, D-07)
+- [x] 05-06-PLAN.md — Wave 3: Dashboard integration + test execution (D-04, D-07)
 
 ---
 
