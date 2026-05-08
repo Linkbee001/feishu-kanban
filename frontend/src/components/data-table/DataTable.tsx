@@ -4,6 +4,7 @@
  */
 
 import { ReactNode } from 'react';
+import { Inbox } from 'lucide-react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -14,6 +15,7 @@ import {
   Row,
   OnChangeFn,
 } from '@tanstack/react-table';
+import { EmptyState } from '../EmptyState';
 
 interface DataTableProps<TData> {
   data: TData[];
@@ -23,6 +25,11 @@ interface DataTableProps<TData> {
   loading?: boolean;
   error?: Error | null;
   emptyMessage?: string;
+  emptyBody?: string;
+  emptyAction?: {
+    label: string;
+    onClick: () => void;
+  };
   onRowClick?: (row: Row<TData>) => void;
 }
 
@@ -34,6 +41,8 @@ export function DataTable<TData>({
   loading = false,
   error = null,
   emptyMessage = '暂无数据',
+  emptyBody,
+  emptyAction,
   onRowClick,
 }: DataTableProps<TData>) {
   const table = useReactTable({
@@ -72,10 +81,13 @@ export function DataTable<TData>({
 
   if (data.length === 0) {
     return (
-      <div className="bg-white border border-gray-200 rounded-xl">
-        <div className="p-12 text-center text-muted">
-          <p>{emptyMessage}</p>
-        </div>
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <EmptyState
+          icon={Inbox}
+          heading={emptyMessage}
+          body={emptyBody ?? '暂无数据显示'}
+          action={emptyAction}
+        />
       </div>
     );
   }

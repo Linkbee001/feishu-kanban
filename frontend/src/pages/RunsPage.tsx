@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router';
-import { Terminal } from '../components/terminal';
+import { Terminal, Inbox } from 'lucide-react';
+import { EmptyState } from '../components/EmptyState';
+import { Terminal as TerminalComponent } from '../components/terminal';
 import { useRuns } from '../hooks/useRuns';
 import { useGroups } from '../hooks/useGroups';
 import { GroupListItem } from '../types/dashboard';
@@ -82,10 +84,11 @@ export function RunsPage() {
               <p>加载失败: {runsError.message}</p>
             </div>
           ) : runs.length === 0 ? (
-            <div className="p-8 text-center text-muted border border-dashed border-gray-300 rounded-xl m-4">
-              <p className="text-lg">暂无运行记录</p>
-              <p className="text-sm mt-2">等待任务执行后查看日志</p>
-            </div>
+            <EmptyState
+              icon={Inbox}
+              heading="暂无运行日志"
+              body="等待任务执行后查看日志"
+            />
           ) : (
             <div className="divide-y divide-gray-100">
               {runs.slice(0, 10).map((run) => (
@@ -189,7 +192,7 @@ export function RunsPage() {
             </div>
           </div>
 
-          <Terminal
+          <TerminalComponent
             logs={logs}
             loading={logsLoading}
             autoScroll={autoRefresh}
@@ -206,7 +209,7 @@ export function RunsPage() {
 
       {/* Terminal without runId (show all logs for selected group) */}
       {!runId && selectedGroup && (
-        <Terminal
+        <TerminalComponent
           logs={[]}
           loading={false}
           autoScroll={false}

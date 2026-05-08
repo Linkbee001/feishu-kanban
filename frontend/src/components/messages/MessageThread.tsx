@@ -1,5 +1,6 @@
 import { useRef, useEffect } from 'react';
 import { MessageSquare } from 'lucide-react';
+import { EmptyState } from '../EmptyState';
 import { MessageListItem } from '../../types/dashboard';
 import { MessageBubble } from './MessageBubble';
 
@@ -30,11 +31,11 @@ export function MessageThread({
   // Empty state
   if (messages.length === 0 && !loading) {
     return (
-      <div className="flex flex-col items-center justify-center p-8 text-center border border-dashed border-gray-300 rounded-2xl bg-gray-50">
-        <MessageSquare className="w-12 h-12 text-muted mb-4" />
-        <h3 className="text-lg font-semibold text-ink mb-2">暂无消息记录</h3>
-        <p className="text-sm text-muted">选择群聊查看消息历史</p>
-      </div>
+      <EmptyState
+        icon={MessageSquare}
+        heading="暂无消息记录"
+        body="选择群聊查看消息历史"
+      />
     );
   }
 

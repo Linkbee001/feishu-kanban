@@ -270,6 +270,11 @@ export function GroupsPage() {
         loading={loading}
         error={error}
         emptyMessage="暂无群数据"
+        emptyBody="点击「配置新群」添加第一个群"
+        emptyAction={{
+          label: '配置新群',
+          onClick: () => handleConfigure(''),
+        }}
       />
 
       {/* Pagination */}
