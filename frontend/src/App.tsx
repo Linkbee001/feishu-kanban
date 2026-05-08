@@ -12,6 +12,7 @@ import {
   RunsPage,
   SettingsPage,
 } from './pages';
+import { GroupConfigPage } from './components/GroupConfigPage';
 
 const router = createBrowserRouter([
   {
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
     children: [
       { path: 'dashboard', element: <DashboardPage /> },
       { path: 'groups', element: <GroupsPage /> },
+      { path: 'group-config', element: <GroupConfigPage /> },
       { path: 'messages', element: <MessagesPage /> },
       { path: 'runs', element: <RunsPage /> },
       { path: 'settings', element: <SettingsPage /> },

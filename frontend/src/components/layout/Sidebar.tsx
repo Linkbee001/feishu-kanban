@@ -20,6 +20,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/admin/dashboard' },
+  { id: 'group-config', label: '群配置', icon: Settings, path: '/admin/group-config' },
   {
     id: 'groups',
     label: '群管理',
