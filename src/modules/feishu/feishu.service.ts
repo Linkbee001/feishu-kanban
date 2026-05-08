@@ -206,6 +206,21 @@ export class FeishuService {
     });
   }
 
+  async getChatInfo(chatId: string): Promise<{ name: string; chatId: string }> {
+    try {
+      const data = await this.request<any>(`/im/v1/chats/${encodeURIComponent(chatId)}`, {
+        method: 'GET',
+      });
+      return {
+        chatId,
+        name: data?.data?.name || chatId,
+      };
+    } catch {
+      // If API fails, return chatId as name
+      return { chatId, name: chatId };
+    }
+  }
+
   async listChatMembers(chatId: string) {
     const members: Array<{
       openId: string;

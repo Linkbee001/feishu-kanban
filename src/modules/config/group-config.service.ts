@@ -20,16 +20,43 @@ export class GroupConfigService {
 
   /**
    * Sync group metadata and create pending config session.
-   * Per D-05: Manual trigger only for this phase.
+   * Per D-03: Returns group info from Feishu API for UI auto-fill.
    */
-  async syncGroupInfo(input: { feishuChatId: string }): Promise<{ sessionId: string; sessionMode: string }> {
-    const session = await this.groupSessions.getOrCreateSession(input.feishuChatId, {
+  async syncGroupInfo(input: { feishuChatId: string }): Promise<{
+    chatId: string;
+    chatName: string;
+    members: Array<{ openId: string; name: string; isAdmin: boolean }>;
+    ownerOpenId: string;
+    memberCount: number;
+  }> {
+    // Fetch chat info and members from Feishu
+    const [chatInfo, feishuMembers] = await Promise.all([
+      this.feishu.getChatInfo(input.feishuChatId),
+      this.feishu.listChatMembers(input.feishuChatId),
+    ]);
+
+    // Transform members to expected format
+    const members = feishuMembers.map(m => ({
+      openId: m.openId,
+      name: m.displayName,
+      isAdmin: false, // Feishu API doesn't provide this directly
+    }));
+
+    // Use first member as owner (since we can't determine admin from basic member list)
+    const owner = members[0];
+
+    // Create or get session
+    await this.groupSessions.getOrCreateSession(input.feishuChatId, {
       feishuChatId: input.feishuChatId,
       sessionMode: GroupSessionMode.pending_config,
     });
+
     return {
-      sessionId: session.id,
-      sessionMode: session.sessionMode,
+      chatId: input.feishuChatId,
+      chatName: chatInfo.name || input.feishuChatId,
+      members,
+      ownerOpenId: owner?.openId || '',
+      memberCount: members.length,
     };
   }
 
