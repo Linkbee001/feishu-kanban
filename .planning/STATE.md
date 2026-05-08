@@ -1,25 +1,25 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.4.0
-milestone_name: Group Config UI
-current_phase: 06
+milestone: v1.5.0
+milestone_name: Admin Dashboard V2
+current_phase: 07
 status: complete
-last_updated: "2026-05-08T18:00:00.000Z"
-last_activity: 2026-05-08
+last_updated: "2026-05-09T00:00:00.000Z"
+last_activity: 2026-05-09
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 24
-  completed_plans: 24
+  total_phases: 7
+  completed_phases: 7
+  total_plans: 30
+  completed_plans: 30
   percent: 100
 ---
 
 # Project State
 
 **Project:** feishu-kanban
-**Status:** Milestone v1.4.0 Complete — Phase 06 Group Config UI finished
-**Current Phase:** 06 (Complete)
-**Last Activity:** 2026-05-08
+**Status:** Milestone v1.5.0 Complete — Phase 07 Admin Dashboard V2 finished
+**Current Phase:** 07 (Complete)
+**Last Activity:** 2026-05-09
 
 ---
 
@@ -36,7 +36,7 @@ progress:
 - PostgreSQL (Prisma ORM)
 - BullMQ + Redis (queue processing)
 - @mariozechner/pi-coding-agent (AI agent SDK)
-- React 19 + TailwindCSS 4 (Admin Dashboard, embedded)
+- React 19 + TailwindCSS 4 + React Router v7 (Admin Dashboard, embedded)
 
 ---
 
@@ -49,57 +49,45 @@ progress:
 | v1.2.0 E2E Verification + Admin Dashboard | ✅ Complete | 1 | 100% — 8 plans executed |
 | v1.3.0 Admin UI Redesign | ✅ Complete | 1 | 100% — 6 plans executed |
 | v1.4.0 Group Config UI | ✅ Complete | 1 | 100% — 4 plans executed |
+| v1.5.0 Admin Dashboard V2 | ✅ Complete | 1 | 100% — 6 plans executed |
 
 ---
 
 ## Current Position
 
-Phase: 06 (Group Config UI) — COMPLETE
+Phase: 07 (Admin Dashboard V2) — COMPLETE
 
-All 4 plans executed successfully:
-- Wave 0: Sidebar navigation with 机器人实例 and 群配置 items
-- Wave 1: GroupConfigPage with chat sync, auto-fill, minimal form
-- Wave 2: Validation helpers, error handling, success states
-- Wave 3: Error recovery buttons, polished success flow
-
-**D-01 through D-05 fully implemented:**
-- ✅ Left sidebar navigation with independent page
-- ✅ Single-page form with 3 numbered sections
-- ✅ Chat ID sync → auto-fill group info → minimal form
-- ✅ Frontend validation + backend error display
-- ✅ Success message with navigation refresh
+All 6 plans executed successfully:
+- Wave 1: Multi-level sidebar navigation + routes + page stubs
+- Wave 2: Groups data table with TanStack Table
+- Wave 3: Drawer for group config editing (480px slide-over)
+- Wave 4: Messages page (chat-style) + Runs page (Terminal-style) — parallel
+- Wave 6: Dashboard + Settings + mobile responsive polish
 
 ---
 
 ## Architecture (Current)
 
 ```
-Feishu WebSocket → BullMQ → FeishuEventService (fire-and-forget)
-                          ↓
-                    GroupRuntimeService
-                          ↓
-                    SessionContext (identity + config + state)
-                          ↓
-                    PiMonoAdapter.steer() / followUp()
-                          ↓
-                    Pi SDK Session (handles queue internally)
-
-Uninitialized Groups → handlePendingConfigGroup → Fixed response (no Pi SDK)
-                                          ↓
-                                    Admin Dashboard /admin/group-config
-                                          ↓
-                                    Sync → Complete Config → Active
+/admin/dashboard    → DashboardPage (stats cards, activity, quick actions)
+/admin/group-config → GroupConfigPage (Phase 06 standalone)
+/admin/groups       → GroupsPage (table + drawer)
+/admin/messages     → MessagesPage (chat thread + filters)
+/admin/runs         → RunsPage (Terminal logs + auto-scroll)
+/admin/settings     → SettingsPage (system config form)
 ```
 
-**Key Features:**
+**Key Features Built:**
 
-1. RuntimeState enum replaces 4 overlapping state variables
-2. Pi SDK's steer/followUp replace custom ActorQueue + queueMode logic
-3. RuntimeEvent reduced to 4 types, GroupRuntimeTask table removed
-4. SessionContext consolidates multiple context interfaces
-5. Fixed response + backend config replaces Pi SDK conversational bootstrap
-6. Single PROJECT-CONFIG.md replaces 7 skeleton documents
-7. Group Config UI provides web-based initialization for unconfigured groups
+1. Multi-level sidebar with Groups submenu (expandable/collapsible)
+2. Groups table with row actions (配置, 解绑, 查看日志)
+3. Drawer-based config editing without leaving groups page
+4. Chat-style message thread with filters (group, date, type)
+5. Terminal-style run logs with color-coded levels (INFO/EXEC/SUCCESS/WARN/ERROR)
+6. Dashboard with stats cards (total groups, active sessions, today's messages)
+7. Settings page with SystemSettings persistence
+8. Mobile responsive layout with hamburger menu
+9. EmptyState component for consistent UX across pages
 
 ---
 
@@ -132,25 +120,35 @@ Uninitialized Groups → handlePendingConfigGroup → Fixed response (no Pi SDK)
 | 2026-05-08 | Phase 06 planned (4 plans in 4 waves) |
 | 2026-05-08 | Phase 06 executed (4 plans, 4 waves) |
 | 2026-05-08 | Milestone v1.4.0 completed |
+| 2026-05-08 | Phase 07 context gathered (Admin Dashboard V2) |
+| 2026-05-08 | Phase 07 planned (6 plans in 4 waves) |
+| 2026-05-08 | Phase 07 Wave 1-2 executed (2 plans) |
+| 2026-05-09 | Phase 06 UAT resumed — blockers found (route/menu missing) |
+| 2026-05-09 | Phase 06 fix applied (restore route + menu) |
+| 2026-05-09 | Phase 07 Wave 3-6 executed (4 remaining plans) |
+| 2026-05-09 | Milestone v1.5.0 completed |
 
 ---
 
 ## Summary
 
-**Phase 06: Group Config UI** — All requirements implemented:
+**Phase 07: Admin Dashboard V2** — All requirements implemented:
 
-- Simplified form with only 2 required fields (chatId, project.name)
-- Auto-sync from Feishu API (group name, member count, owner)
-- Web-based group initialization via /admin/group-config
-- Success flow with navigation back to dashboard
-- Error recovery with retry options
+- Complete admin interface with multi-level navigation
+- Groups management with table + drawer editing
+- Messages history with chat-style thread
+- Run logs with Terminal-style viewer
+- Dashboard with stats and quick actions
+- Settings page with persistence
+- Mobile responsive layout
 
-**All milestones complete!** v1.4.0 ships with:
-- Table-based Admin Dashboard (Phase 05)
-- Group Config UI for easy initialization (Phase 06)
-- Full E2E test coverage (Phase 04)
-- Refactored PiMono architecture (Phases rebuild-1/2/3)
+**Phase 06 Fix:** Restored `/admin/group-config` route and menu entry that Phase 07 accidentally removed.
+
+**All milestones complete!** v1.5.0 ships with:
+- Full Admin Dashboard V2 (Phase 07)
+- Group Config UI restored (Phase 06 fix)
+- Previous phases still working
 
 ---
 
-*Last updated: 2026-05-08 after Phase 06 completion*
+*Last updated: 2026-05-09 after Phase 07 completion*

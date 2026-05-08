@@ -1,8 +1,8 @@
 # Project Roadmap
 
 **Project:** feishu-kanban
-**Status:** Complete — Phase 06 Group Config UI (2026-05-08)
-**Last Updated:** 2026-05-08
+**Status:** Complete — Phase 07 Admin Dashboard V2 (2026-05-09)
+**Last Updated:** 2026-05-09
 
 ---
 
@@ -13,40 +13,47 @@
 - ✅ **v1.2.0 — E2E Verification + Admin Dashboard** — Phase 04-e2e-verification (complete 2026-05-06)
 - ✅ **v1.3.0 — Admin UI Redesign** — Phase 05-admin-ui-redesign (complete 2026-05-08)
 - ✅ **v1.4.0 — Group Config UI** — Phase 06-group-config (complete 2026-05-08)
+- ✅ **v1.5.0 — Admin Dashboard V2** — Phase 07-admin-dashboard-v2 (complete 2026-05-09)
 
 ---
 
 ## Current Phase
 
-### Phase 06: Group Config UI - Admin Dashboard 群配置界面
+### Phase 07: Admin Dashboard V2 - Complete Admin Interface with Multi-level Navigation
 
-**Goal:** 在 Admin Dashboard 中添加群项目配置界面，让未配置的群可以通过 Web UI 完成初始化，替代现有的 API 端点方式。
+**Goal:** 重构管理后台，基于 shadcn-admin 模板，实现群管理、会话监控、消息记录、运行日志等功能的完整管理界面。
 
-**Requirements:** [D-01, D-02, D-03, D-04, D-05]
+**Requirements:** [D-01, D-02, D-03, D-04, D-05, D-06]
 
-**Context:** [.planning/phases/06-group-config/06-CONTEXT.md](phases/06-group-config/06-CONTEXT.md)
+**Context:** [.planning/phases/07-admin-dashboard-v2/07-CONTEXT.md](phases/07-admin-dashboard-v2/07-CONTEXT.md)
 
-**Status:** Complete ✓ (2026-05-08)
+**Status:** Complete ✓ (2026-05-09)
 
 **Progress:**
 - [x] Context gathered
-- [x] Research (skipped - requirements clear)
+- [x] Research complete
 - [x] Planning complete
-- [x] Execution
-- [x] Verification
+- [x] Execution (6 plans, 4 waves)
+- [x] Build verified
 
-**Plans:** 4/4 plans complete
+**Plans:** 6/6 plans complete
 
 **Wave Structure:**
-- Wave 0: 06-00 (Sidebar Navigation) — no dependencies
-- Wave 1: 06-01 (Group Config Page) — depends on Wave 0
-- Wave 2: 06-02 (Validation & Error Handling) — depends on Wave 1
-- Wave 3: 06-03 (Integration & Polish) — depends on Wave 2
+- Wave 1: 07-01 (Sidebar + Routes + Page Stubs) ✓
+- Wave 2: 07-02 (Groups Data Table) ✓
+- Wave 3: 07-03 (Drawer for Group Config) ✓
+- Wave 4: 07-04 (Messages Page) + 07-05 (Runs Page) — parallel ✓
+- Wave 6: 07-06 (Dashboard + Settings + Polish) ✓
 
-**Key Design:**
-- **简化表单（per 用户要求）：** 仅 2 个必填字段（chatId, project.name）
-- **自动同步：** 群名称、成员列表通过飞书 API 自动填充，无需用户填写
-- **提交后初始化：** 调用 `/api/group-config/:chatId/complete` 完成项目创建
+**Key Features Built:**
+- Multi-level sidebar navigation with Groups submenu
+- Groups page with TanStack Table + Drawer config editing
+- Messages page with chat-style thread + filters
+- Runs page with Terminal-style log viewer + auto-scroll
+- Dashboard with stats cards + activity feed + quick actions
+- Settings page with form persistence
+- Mobile responsive layout with hamburger menu
+- EmptyState component for consistent UX
 
 ---
 
