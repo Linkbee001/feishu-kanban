@@ -4,6 +4,7 @@ import { GroupRuntimeService } from '../agent/group-runtime.service';
 import { FeishuService } from '../feishu/feishu.service';
 import { GroupPolicyService } from '../project/group-policy.service';
 import { ProjectMemberProfileService } from '../project/project-member-profile.service';
+import { ProjectService } from '../project/project.service';
 import { RepoSyncService } from '../repo/repo-sync.service';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class AdminService {
     private readonly feishu: FeishuService,
     private readonly policies: GroupPolicyService,
     private readonly memberProfiles: ProjectMemberProfileService,
+    private readonly projects: ProjectService,
     private readonly repoSync: RepoSyncService,
   ) {}
 
@@ -514,6 +516,14 @@ export class AdminService {
       page,
       limit,
     };
+  }
+
+  /**
+   * Unbind a group by chatId
+   * Calls ProjectService.unbindByChat to remove chat binding
+   */
+  async unbindGroup(chatId: string) {
+    return this.projects.unbindByChat(chatId);
   }
 }
 

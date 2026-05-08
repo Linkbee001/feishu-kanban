@@ -34,10 +34,24 @@ export function GroupsPage() {
   const drawerOpen = searchParams.get('drawer') === 'group-config';
   const drawerChatId = searchParams.get('chatId') || null;
 
-  const { groups, total, loading, error, refetch, setParams } = useGroups({
+  const { groups, total, loading, error, refetch, setParams, unbind, unbinding } = useGroups({
     page,
     limit,
   });
+
+  // Toast state for unbind
+  const [toast, setToast] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  // Auto-dismiss toast after 3 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   // Open drawer by setting URL params
   const openDrawer = useCallback((chatId: string) => {
@@ -107,9 +121,16 @@ export function GroupsPage() {
     navigate(`/admin/messages?group=${encodeURIComponent(chatId)}`);
   }, [navigate]);
 
-  const handleUnbind = useCallback((chatId: string, name: string) => {
-    // Unbind is handled via ConfirmDialog in RowActions
-  }, []);
+  const handleUnbind = useCallback(async (chatId: string, name: string) => {
+    try {
+      await unbind(chatId);
+      setToast({ type: 'success', message: `群"${name}"已解绑` });
+      refetch();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '解绑失败';
+      setToast({ type: 'error', message });
+    }
+  }, [unbind, refetch]);
 
   // Table columns
   const columns: ColumnDef<GroupListItem>[] = useMemo(
@@ -173,6 +194,19 @@ export function GroupsPage() {
 
   return (
     <div>
+      {/* Toast notification */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 px-4 py-3 rounded-xl shadow-lg z-50 ${
+            toast.type === 'success'
+              ? 'bg-green-50 border border-green-200 text-green-800'
+              : 'bg-red-50 border border-red-200 text-danger'
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex items-start justify-between mb-6">
         <div>

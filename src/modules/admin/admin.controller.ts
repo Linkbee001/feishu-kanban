@@ -99,4 +99,10 @@ export class AdminController {
       limit: limit ? parseInt(limit, 10) : 25,
     });
   }
+
+  @Post('api/admin/groups/:chatId/unbind')
+  @HttpCode(200)
+  unbindGroup(@Param('chatId') chatId: string) {
+    return this.admin.unbindGroup(chatId);
+  }
 }

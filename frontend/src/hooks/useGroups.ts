@@ -10,6 +10,9 @@ interface UseGroupsReturn {
   error: Error | null;
   refetch: () => void;
   setParams: (params: GroupsQueryParams) => void;
+  unbind: (chatId: string) => Promise<void>;
+  unbinding: boolean;
+  unbindError: Error | null;
 }
 
 export function useGroups(initialParams?: GroupsQueryParams): UseGroupsReturn {
@@ -20,6 +23,8 @@ export function useGroups(initialParams?: GroupsQueryParams): UseGroupsReturn {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [params, setParamsState] = useState<GroupsQueryParams>(initialParams ?? {});
+  const [unbinding, setUnbinding] = useState(false);
+  const [unbindError, setUnbindError] = useState<Error | null>(null);
 
   const fetchGroups = useCallback(async () => {
     setLoading(true);
@@ -57,6 +62,27 @@ export function useGroups(initialParams?: GroupsQueryParams): UseGroupsReturn {
     if (newParams.limit) setLimit(newParams.limit);
   }, []);
 
+  const unbind = useCallback(async (chatId: string) => {
+    setUnbinding(true);
+    setUnbindError(null);
+    try {
+      const response = await fetch(`/api/admin/groups/${encodeURIComponent(chatId)}/unbind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ message: 'Unbind failed' }));
+        throw new Error(data.message || `Failed to unbind group: ${response.status}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setUnbindError(new Error(message));
+      throw err;
+    } finally {
+      setUnbinding(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchGroups();
   }, [fetchGroups]);
@@ -70,5 +96,8 @@ export function useGroups(initialParams?: GroupsQueryParams): UseGroupsReturn {
     error,
     refetch: fetchGroups,
     setParams,
+    unbind,
+    unbinding,
+    unbindError,
   };
 }
