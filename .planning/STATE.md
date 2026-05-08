@@ -1,24 +1,24 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3.0
-milestone_name: Admin UI Redesign
-current_phase: 05
+milestone: v1.4.0
+milestone_name: Group Config UI
+current_phase: 06
 status: complete
-last_updated: "2026-05-08T12:00:00.000Z"
+last_updated: "2026-05-08T18:00:00.000Z"
 last_activity: 2026-05-08
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 20
-  completed_plans: 20
+  total_phases: 6
+  completed_phases: 6
+  total_plans: 24
+  completed_plans: 24
   percent: 100
 ---
 
 # Project State
 
 **Project:** feishu-kanban
-**Status:** Milestone v1.3.0 Complete — Phase 05 Admin UI Redesign finished
-**Current Phase:** 05 (Complete)
+**Status:** Milestone v1.4.0 Complete — Phase 06 Group Config UI finished
+**Current Phase:** 06 (Complete)
 **Last Activity:** 2026-05-08
 
 ---
@@ -47,24 +47,27 @@ progress:
 | v1.0.0 Rebuild | ✅ Complete | 2 | 100% |
 | v1.1.0 Architecture Refactor | ✅ Complete | 1 | 100% |
 | v1.2.0 E2E Verification + Admin Dashboard | ✅ Complete | 1 | 100% — 8 plans executed |
-| v1.3.0 Admin UI Redesign | 🔄 Planning | 1 | 0% — 6 plans ready |
+| v1.3.0 Admin UI Redesign | ✅ Complete | 1 | 100% — 6 plans executed |
+| v1.4.0 Group Config UI | ✅ Complete | 1 | 100% — 4 plans executed |
 
 ---
 
 ## Current Position
 
-Phase: 05 (Admin UI Redesign) — EXECUTING
-Plan: 1 of 6
-**Status:** Ready to execute Phase 05
-**Phase:** 05-admin-ui-redesign (Admin UI Redesign)
-**Plans:** 6 plans in 4 waves
+Phase: 06 (Group Config UI) — COMPLETE
 
-**Wave Structure:**
+All 4 plans executed successfully:
+- Wave 0: Sidebar navigation with 机器人实例 and 群配置 items
+- Wave 1: GroupConfigPage with chat sync, auto-fill, minimal form
+- Wave 2: Validation helpers, error handling, success states
+- Wave 3: Error recovery buttons, polished success flow
 
-- Wave 0: 05-01 (E2E test infrastructure), 05-02 (Dependencies) — no dependencies
-- Wave 1: 05-03 (Robot Instance Table), 05-04 (Agent Run Table) — depends on Wave 0
-- Wave 2: 05-05 (Modal + Action Buttons) — depends on Wave 1
-- Wave 3: 05-06 (Dashboard Integration + Tests) — depends on Wave 2
+**D-01 through D-05 fully implemented:**
+- ✅ Left sidebar navigation with independent page
+- ✅ Single-page form with 3 numbered sections
+- ✅ Chat ID sync → auto-fill group info → minimal form
+- ✅ Frontend validation + backend error display
+- ✅ Success message with navigation refresh
 
 ---
 
@@ -83,14 +86,12 @@ Feishu WebSocket → BullMQ → FeishuEventService (fire-and-forget)
 
 Uninitialized Groups → handlePendingConfigGroup → Fixed response (no Pi SDK)
                                           ↓
-                                    Admin calls /api/group-config/:chatId/complete
+                                    Admin Dashboard /admin/group-config
                                           ↓
-                                    PROJECT-CONFIG.md (single doc)
-                                          ↓
-                                    initFromChat (no skeleton docs)
+                                    Sync → Complete Config → Active
 ```
 
-**Key Simplifications:**
+**Key Features:**
 
 1. RuntimeState enum replaces 4 overlapping state variables
 2. Pi SDK's steer/followUp replace custom ActorQueue + queueMode logic
@@ -98,6 +99,7 @@ Uninitialized Groups → handlePendingConfigGroup → Fixed response (no Pi SDK)
 4. SessionContext consolidates multiple context interfaces
 5. Fixed response + backend config replaces Pi SDK conversational bootstrap
 6. Single PROJECT-CONFIG.md replaces 7 skeleton documents
+7. Group Config UI provides web-based initialization for unconfigured groups
 
 ---
 
@@ -123,14 +125,32 @@ Uninitialized Groups → handlePendingConfigGroup → Fixed response (no Pi SDK)
 | 2026-05-07 | Phase 05 context gathered (Admin UI Redesign) |
 | 2026-05-07 | Phase 05 research completed |
 | 2026-05-07 | Phase 05 planned (6 plans in 4 waves) |
-| 2026-05-07 | Phase 05 verification passed |
+| 2026-05-08 | Phase 05 executed (6 plans, 4 waves) |
+| 2026-05-08 | Phase 05 verified (8/8 must-haves) |
+| 2026-05-08 | Milestone v1.3.0 completed |
+| 2026-05-08 | Phase 06 context gathered (Group Config UI) |
+| 2026-05-08 | Phase 06 planned (4 plans in 4 waves) |
+| 2026-05-08 | Phase 06 executed (4 plans, 4 waves) |
+| 2026-05-08 | Milestone v1.4.0 completed |
 
 ---
 
-## History
+## Summary
 
-**Phase rebuild-3:** Nyquist validation skipped — refactor phase with existing test coverage (`test/pi-mono.adapter.spec.ts`, 919 lines). Behavioral equivalence validated through existing integration tests. No new API endpoints or state machines requiring pre-implementation test scaffolds.
+**Phase 06: Group Config UI** — All requirements implemented:
+
+- Simplified form with only 2 required fields (chatId, project.name)
+- Auto-sync from Feishu API (group name, member count, owner)
+- Web-based group initialization via /admin/group-config
+- Success flow with navigation back to dashboard
+- Error recovery with retry options
+
+**All milestones complete!** v1.4.0 ships with:
+- Table-based Admin Dashboard (Phase 05)
+- Group Config UI for easy initialization (Phase 06)
+- Full E2E test coverage (Phase 04)
+- Refactored PiMono architecture (Phases rebuild-1/2/3)
 
 ---
 
-*Last updated: 2026-05-06 after rebuild-3 context gathered*
+*Last updated: 2026-05-08 after Phase 06 completion*
