@@ -172,7 +172,9 @@ export function GroupConfigPage() {
               <User className="w-5 h-5 text-muted" />
               <div>
                 <p className="text-sm text-muted">管理员</p>
-                <p className="font-medium text-ink">{groupInfo.ownerOpenId.slice(0, 16)}...</p>
+                <p className="font-medium text-ink">
+                  {groupInfo.ownerOpenId ? `${groupInfo.ownerOpenId.slice(0, 16)}...` : 'N/A'}
+                </p>
               </div>
             </div>
           </div>
