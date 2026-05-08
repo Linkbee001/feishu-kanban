@@ -105,4 +105,48 @@ export class AdminController {
   unbindGroup(@Param('chatId') chatId: string) {
     return this.admin.unbindGroup(chatId);
   }
+
+  @Get('api/admin/messages')
+  listMessages(
+    @Query('group') group?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('type') type?: 'all' | 'user' | 'bot',
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.admin.listMessages({
+      group,
+      startDate,
+      endDate,
+      type,
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 50,
+    });
+  }
+
+  @Get('api/admin/messages/:id')
+  getMessage(@Param('id') id: string) {
+    return this.admin.getMessage(id);
+  }
+
+  @Get('api/admin/runs')
+  listRuns(
+    @Query('group') group?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.admin.listRuns({
+      group,
+      status,
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 50,
+    });
+  }
+
+  @Get('api/admin/runs/:id/logs')
+  getRunLogs(@Param('id') id: string) {
+    return this.admin.getRunLogs(id);
+  }
 }

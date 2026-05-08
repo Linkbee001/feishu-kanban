@@ -525,6 +525,166 @@ export class AdminService {
   async unbindGroup(chatId: string) {
     return this.projects.unbindByChat(chatId);
   }
+
+  /**
+   * List runs with pagination and filtering
+   */
+  async listRuns(options: { group?: string; status?: string; page: number; limit: number }) {
+    const { group, status, page, limit } = options;
+    const skip = (page - 1) * limit;
+
+    // Build where clause
+    const where: any = {};
+
+    // Filter by group (chatId) through project relation
+    if (group) {
+      const project = await this.prisma.project.findFirst({
+        where: { feishuChatId: group },
+        select: { id: true },
+      });
+      if (project) {
+        where.projectId = project.id;
+      } else {
+        // No project for this chatId, return empty
+        return { items: [], total: 0, page, limit };
+      }
+    }
+
+    // Filter by status
+    if (status) {
+      where.status = status;
+    }
+
+    const [runs, total] = await Promise.all([
+      this.prisma.agentRun.findMany({
+        where,
+        include: {
+          project: { select: { feishuChatId: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.agentRun.count({ where }),
+    ]);
+
+    const items = runs.map((run) => ({
+      id: run.id,
+      chatId: run.project?.feishuChatId ?? '',
+      chatName: run.project?.name ?? '未命名群',
+      runType: run.runType,
+      status: run.status,
+      skillName: run.skillName ?? null,
+      intent: run.intent,
+      startedAt: run.startedAt?.toISOString() ?? null,
+      finishedAt: run.finishedAt?.toISOString() ?? null,
+      createdAt: run.createdAt.toISOString(),
+      errorMessage: run.errorMessage ?? null,
+    }));
+
+    return { items, total, page, limit };
+  }
+
+  /**
+   * Get logs for a specific run by runId
+   * Queries RuntimeEvents and maps to LogLine format
+   */
+  async getRunLogs(runId: string) {
+    const run = await this.prisma.agentRun.findUnique({
+      where: { id: runId },
+      include: {
+        project: { select: { id: true, feishuChatId: true, name: true } },
+      },
+    });
+
+    if (!run) {
+      throw new NotFoundException('Run not found');
+    }
+
+    const projectId = run.projectId;
+
+    // Fetch RuntimeEvents for this project
+    // Note: RuntimeEvents are not directly linked to AgentRun
+    // We filter by projectId and time range around the run
+    const runtimeEvents = await (this.prisma as any).runtimeEvent.findMany({
+      where: {
+        projectId,
+        createdAt: {
+          gte: run.startedAt ?? run.createdAt,
+          lte: run.finishedAt ?? new Date(),
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }, { sequence: 'asc' }],
+      take: 500,
+    });
+
+    // Map to LogLine format with level determination
+    const logs = runtimeEvents.map((event: any) => {
+      const level = this.mapEventTypeToLogLevel(event.eventType, event.payload);
+      const timestamp = event.createdAt.toISOString();
+      const message = this.formatLogMessage(event);
+
+      return {
+        timestamp,
+        level,
+        message,
+        metadata: event.payload,
+      };
+    });
+
+    return {
+      runId,
+      chatId: run.project?.feishuChatId ?? '',
+      chatName: run.project?.name ?? '未命名群',
+      runStatus: run.status,
+      logs,
+    };
+  }
+
+  /**
+   * Map RuntimeEvent eventType to log level
+   */
+  private mapEventTypeToLogLevel(eventType: string, payload: any): 'INFO' | 'EXEC' | 'SUCCESS' | 'WARN' | 'ERROR' {
+    switch (eventType) {
+      case 'message_submitted':
+        return 'INFO';
+      case 'turn_completed':
+        // Check if turn was successful
+        if (payload?.status === 'succeeded') return 'SUCCESS';
+        if (payload?.status === 'failed' || payload?.error) return 'ERROR';
+        return 'INFO';
+      case 'confirmation_requested':
+        return 'WARN';
+      case 'session_state_changed':
+        if (payload?.runtimeState === 'error') return 'ERROR';
+        return 'INFO';
+      default:
+        return 'INFO';
+    }
+  }
+
+  /**
+   * Format log message from RuntimeEvent
+   */
+  private formatLogMessage(event: any): string {
+    const payload = event.payload ?? {};
+    const eventType = event.eventType;
+
+    switch (eventType) {
+      case 'message_submitted':
+        return `收到消息: ${payload?.rawText?.slice(0, 100) ?? '(空)'}...`;
+      case 'turn_completed':
+        const status = payload?.status ?? 'unknown';
+        const summary = payload?.outputSummary ?? '';
+        return `任务完成: ${status}${summary ? ` - ${summary.slice(0, 80)}...` : ''}`;
+      case 'confirmation_requested':
+        return `等待确认: ${payload?.actionType ?? 'unknown'} - ${payload?.summary ?? ''}`;
+      case 'session_state_changed':
+        return `状态变更: ${payload?.runtimeState ?? 'unknown'}`;
+      default:
+        return `${eventType}: ${JSON.stringify(payload).slice(0, 100)}...`;
+    }
+  }
 }
 
 function emptyCounts() {
