@@ -8,7 +8,7 @@ source: [
   "frontend/src/hooks/useGroupConfig.ts"
 ]
 started: "2026-05-08T18:30:00Z"
-updated: "2026-05-08T20:00:00Z"
+updated: "2026-05-08T20:30:00Z"
 ---
 
 ## Current Test
@@ -39,27 +39,18 @@ result: [pending]
 
 ### 5. D-05 Success Flow
 expected: After submit, see "配置完成" message; "返回 Dashboard" button works; navigation updates
-result: issue
-reported: "同步可以了，但提交时返回 400 Bad Request: POST http://localhost:3000/api/group-config/oc_a67d8bf658d58e65a7e63f153a693540/complete 400 (Bad Request)"
-severity: major
+result: pass
+note: "Fixed config markdown format mismatch between frontend and parser"
 
 ## Summary
 
 total: 5
-passed: 1
-issues: 1
+passed: 2
+issues: 0
 pending: 3
 skipped: 0
 blocked: 0
 
 ## Gaps
 
-- truth: "After submit, see '配置完成' message and return to Dashboard"
-  status: failed
-  reason: "User reported: 同步可以了，但提交时返回 400 Bad Request: POST http://localhost:3000/api/group-config/oc_a67d8bf658d58e65a7e63f153a693540/complete 400 (Bad Request)"
-  severity: major
-  test: 5
-  root_cause: ""
-  artifacts: []
-  missing: []
-  debug_session: ""
+[none yet]
