@@ -8,6 +8,7 @@ import {
   Terminal,
   Settings,
   ChevronRight,
+  X,
 } from 'lucide-react';
 
 interface NavItem {
@@ -35,7 +36,12 @@ const navItems: NavItem[] = [
   { id: 'settings', label: '系统设置', icon: Settings, path: '/admin/settings' },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  onClose?: () => void;
+  isMobile?: boolean;
+}
+
+export function Sidebar({ onClose, isMobile }: SidebarProps) {
   const location = useLocation();
   const [openSections, setOpenSections] = useState<string[]>(['groups']);
 
@@ -63,10 +69,20 @@ export function Sidebar() {
 
   return (
     <div className="w-[280px] h-full bg-white border-r border-gray-200 flex flex-col">
-      {/* Logo */}
-      <div className="p-6 border-b border-gray-200">
-        <h1 className="text-xl font-bold text-ink">Feishu Kanban</h1>
-        <p className="text-xs text-muted mt-1">管理后台</p>
+      // Logo */}
+      <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-ink">Feishu Kanban</h1>
+          <p className="text-xs text-muted mt-1">管理后台</p>
+        </div>
+        {isMobile && onClose && (
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-panel transition-colors"
+          >
+            <X className="w-5 h-5 text-muted" />
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
@@ -112,6 +128,7 @@ export function Sidebar() {
                         <Link
                           key={child.id}
                           to={child.path}
+                          onClick={isMobile && onClose ? onClose : undefined}
                           className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all ${
                             childActive
                               ? 'bg-primary/10 text-primary font-medium border-l-4 border-primary'
@@ -132,6 +149,7 @@ export function Sidebar() {
             <Link
               key={item.id}
               to={item.path!}
+              onClick={isMobile && onClose ? onClose : undefined}
               className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
                 isActive(item.path!)
                   ? 'bg-primary/10 text-primary font-medium border-l-4 border-primary'
