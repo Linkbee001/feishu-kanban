@@ -1,81 +1,65 @@
+/**
+ * Dashboard component
+ * Main admin dashboard with integrated tables and filter bar
+ * Implements D-04 (manual refresh), D-07 (filter bar), and table integration
+ */
+
+import { useState, useCallback } from 'react';
+import { RobotInstanceTable } from './admin/RobotInstanceTable';
+import { AgentRunTable } from './admin/AgentRunTable';
+import { FilterBar } from './admin/FilterBar';
 import { useApi } from '../hooks/useApi';
 
-interface DashboardStats {
-  totalInstances: number;
-  activeSessions: number;
-  runningRuns: number;
-  recentArtifacts: number;
-}
-
+/**
+ * Dashboard renders the main admin UI
+ * - Filter bar at top with search, status dropdown, and manual refresh
+ * - Robot Instance Table below filter bar
+ * - Agent Run Table at bottom
+ * - Filter state passed to both tables for client-side filtering
+ */
 export function Dashboard() {
-  const { data: instances, loading } = useApi<{ chatId: string; runtimeStatus: string | null }[]>('/api/admin/robot-instances');
+  // Filter state (D-07)
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
 
-  // Calculate statistics from instances
-  const stats: DashboardStats = {
-    totalInstances: instances?.length ?? 0,
-    activeSessions: instances?.filter(i => i.runtimeStatus === 'running').length ?? 0,
-    runningRuns: 0, // Would need separate API call
-    recentArtifacts: 0, // Would need separate API call
-  };
+  // Fetch data with refetch capability for manual refresh (D-04)
+  const { refetch: refetchInstances } = useApi('/api/admin/robot-instances');
+  const { refetch: refetchRuns } = useApi('/api/agent-runs');
 
-  if (loading) {
-    return (
-      <div className="p-6">
-        <p className="text-muted">加载中...</p>
-      </div>
-    );
-  }
+  // Manual refresh handler - triggers refetch for both tables (D-04)
+  const handleRefresh = useCallback(() => {
+    refetchInstances();
+    refetchRuns();
+  }, [refetchInstances, refetchRuns]);
 
   return (
     <div className="p-6">
+      {/* Header section */}
       <div className="border-b border-gray-200 pb-4">
-        <h2 className="text-xl font-semibold text-ink">仪表盘</h2>
-        <p className="text-sm text-muted mt-1">关键统计和快速操作入口</p>
+        <h2 className="text-xl font-semibold text-ink">机器人实例管理</h2>
+        <p className="text-sm text-muted mt-1">管理飞书机器人实例和 Agent 运行状态</p>
       </div>
 
-      <div className="mt-6 grid grid-cols-4 gap-4">
-        <StatCard label="机器人实例数" value={stats.totalInstances} />
-        <StatCard label="活跃会话" value={stats.activeSessions} color="primary" />
-        <StatCard label="运行中的 Agent" value={stats.runningRuns} color="warning" />
-        <StatCard label="最近产物数" value={stats.recentArtifacts} />
+      {/* Filter bar with manual refresh (D-04, D-07) */}
+      <div className="mt-4">
+        <FilterBar
+          onSearchChange={setSearchQuery}
+          onStatusChange={setStatusFilter}
+          onRefresh={handleRefresh}
+        />
       </div>
 
-      <div className="mt-6 bg-gradient-to-br from-primary/10 to-white rounded-2xl p-4 border border-primary/20">
-        <h3 className="font-semibold text-ink">快速操作</h3>
-        <div className="mt-3 flex gap-3">
-          <button className="px-4 py-2 rounded-full bg-primary text-white font-semibold hover:bg-primary/80 transition-colors">
-            创建测试实例
-          </button>
-          <button className="px-4 py-2 rounded-full bg-primary/10 text-primary font-semibold hover:bg-primary/20 transition-colors">
-            查看所有实例
-          </button>
-        </div>
-      </div>
-
+      {/* Robot Instance Table */}
       <div className="mt-6">
-        <h3 className="font-semibold text-ink mb-3">最近事件</h3>
-        <div className="border border-dashed border-gray-200 rounded-2xl p-4 bg-white/60">
-          <p className="text-muted text-center">从左侧选择一个实例查看详细事件</p>
-        </div>
+        <h3 className="font-semibold text-ink mb-3">机器人实例</h3>
+        <RobotInstanceTable searchQuery={searchQuery} statusFilter={statusFilter} />
       </div>
-    </div>
-  );
-}
 
-function StatCard({ label, value, color = 'ink' }: { label: string; value: number; color?: string }) {
-  const colorClasses = {
-    ink: 'text-ink',
-    primary: 'text-primary',
-    warning: 'text-warning',
-    danger: 'text-danger',
-  };
-
-  return (
-    <div className="border border-gray-200 rounded-2xl bg-white p-3">
-      <p className="text-sm text-muted">{label}</p>
-      <p className={`text-2xl font-bold mt-1 ${colorClasses[color as keyof typeof colorClasses]}`}>
-        {value}
-      </p>
+      {/* Agent Run Table */}
+      <div className="mt-6">
+        <h3 className="font-semibold text-ink mb-3">Agent 运行记录</h3>
+        <AgentRunTable searchQuery={searchQuery} statusFilter={statusFilter} />
+      </div>
     </div>
   );
 }

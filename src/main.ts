@@ -13,7 +13,13 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
 
   // Serve frontend static assets at /admin route
-  const frontendPath = path.join(__dirname, 'frontend/dist');
+  // Use process.cwd() to get project root, which works in both dev and compiled mode
+  const frontendPath = path.join(process.cwd(), 'frontend', 'dist');
+
+  // Serve assets at root level for script/stylesheet URLs (e.g., /assets/index.js)
+  app.use('/assets', express.static(path.join(frontendPath, 'assets')));
+
+  // Serve remaining frontend files at /admin route
   app.use('/admin', express.static(frontendPath));
 
   // SPA fallback - serve index.html for all /admin/* routes

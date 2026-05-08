@@ -1,9 +1,9 @@
 /**
  * AgentRunTable component
- * TanStack Table for displaying agent run data with pagination and sorting
+ * TanStack Table for displaying agent run data with pagination, sorting, and client-side filtering
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -19,6 +19,11 @@ import { StatusLabel } from './StatusLabel';
 import { PaginationControls } from './PaginationControls';
 import { ConfirmDialog } from './ConfirmDialog';
 import { apiDelete } from '../../hooks/useApi';
+
+interface AgentRunTableProps {
+  searchQuery?: string;
+  statusFilter?: string | null;
+}
 
 /**
  * Column definitions for AgentRun table
@@ -79,10 +84,11 @@ const columns: ColumnDef<AgentRun>[] = [
  * - Fetches data from /api/agent-runs using useApi
  * - Pagination support with getPaginationRowModel (D-08)
  * - Sortable column headers (D-08)
+ * - Client-side filtering by searchQuery and statusFilter (D-07)
  * - Pagination resets when data changes (per RESEARCH.md pitfall 4)
  * - Prompt truncated to 50 chars with ellipsis
  */
-export function AgentRunTable() {
+export function AgentRunTable({ searchQuery = '', statusFilter = null }: AgentRunTableProps) {
   const { data: agentRuns, loading, error } = useApi<AgentRun[]>('/api/agent-runs');
 
   // Sorting state
@@ -91,9 +97,27 @@ export function AgentRunTable() {
   // Pagination state
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 10 });
 
+  // Client-side filtering (D-07)
+  const filteredData = useMemo(() => {
+    if (!agentRuns) return [];
+
+    return agentRuns.filter((run) => {
+      // Search filter - matches id or prompt
+      const matchesSearch = !searchQuery ||
+        run.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        run.prompt.toLowerCase().includes(searchQuery.toLowerCase());
+
+      // Status filter
+      const matchesStatus = !statusFilter ||
+        run.status === statusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [agentRuns, searchQuery, statusFilter]);
+
   // Create table instance
   const table = useReactTable({
-    data: agentRuns ?? [],
+    data: filteredData,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -108,10 +132,10 @@ export function AgentRunTable() {
 
   // Reset pagination when data changes (per RESEARCH.md pitfall 4)
   useEffect(() => {
-    if (agentRuns) {
+    if (filteredData) {
       table.setPageIndex(0);
     }
-  }, [agentRuns]);
+  }, [filteredData]);
 
   // Loading state
   if (loading) {
