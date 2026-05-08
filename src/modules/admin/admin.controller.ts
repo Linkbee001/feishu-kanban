@@ -84,4 +84,19 @@ export class AdminController {
   updatePolicy(@Param('chatId') chatId: string, @Body() body: any) {
     return this.admin.updatePolicy(chatId, body);
   }
+
+  @Get('api/admin/groups')
+  listGroups(
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.admin.listGroups({
+      status,
+      search,
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 25,
+    });
+  }
 }

@@ -434,6 +434,87 @@ export class AdminService {
       ? ({ ...(value as Record<string, unknown>) })
       : null;
   }
+
+  /**
+   * List groups with pagination, filtering, and sorting
+   * Maps sessionMode to status: active→bound, pending_config→pending_config, bootstrap→unbound
+   */
+  async listGroups(options: {
+    status?: string;
+    search?: string;
+    page: number;
+    limit: number;
+  }) {
+    const { status, search, page, limit } = options;
+    const skip = (page - 1) * limit;
+
+    // Build where clause
+    const where: any = {};
+
+    // Filter by status (mapped from sessionMode)
+    if (status) {
+      const statusMap: Record<string, string> = {
+        bound: 'active',
+        pending_config: 'pending_config',
+        unbound: 'bootstrap',
+      };
+      const dbStatus = statusMap[status];
+      if (dbStatus) {
+        where.sessionMode = dbStatus;
+      }
+    }
+
+    // Fetch sessions with project info
+    const [sessions, total] = await Promise.all([
+      this.prisma.groupAgentSession.findMany({
+        where,
+        include: {
+          project: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.groupAgentSession.count({ where }),
+    ]);
+
+    // Map to GroupListItem format
+    const items = sessions.map((session) => {
+      const statusMap: Record<string, 'bound' | 'pending_config' | 'unbound'> = {
+        active: 'bound',
+        pending_config: 'pending_config',
+        bootstrap: 'unbound',
+        disabled: 'unbound',
+      };
+
+      return {
+        chatId: session.feishuChatId,
+        name: session.project?.name ?? '未命名群',
+        memberCount: 0, // Will be populated from Feishu API or cached
+        status: statusMap[session.sessionMode] ?? 'unbound',
+        createdAt: session.createdAt.toISOString(),
+        lastActiveAt: session.lastMessageAt?.toISOString() ?? session.updatedAt.toISOString(),
+      };
+    });
+
+    // Apply search filter client-side for name/chatId (Prisma doesn't support OR across relations easily)
+    let filteredItems = items;
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredItems = items.filter(
+        (item) =>
+          item.name.toLowerCase().includes(searchLower) ||
+          item.chatId.toLowerCase().includes(searchLower)
+      );
+    }
+
+    return {
+      items: filteredItems,
+      total: search ? filteredItems.length : total,
+      page,
+      limit,
+    };
+  }
 }
 
 function emptyCounts() {
