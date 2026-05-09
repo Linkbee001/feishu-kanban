@@ -1,18 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 02-rebuild-2
 source: [02-01-SUMMARY.md, 02-02-SUMMARY.md, 02-03-SUMMARY.md, 02-04-SUMMARY.md, 02-05-SUMMARY.md]
 started: 2026-05-07T00:00:00Z
-updated: 2026-05-07T04:11:00Z
+updated: 2026-05-09T07:00:00Z
 ---
 
 ## Current Test
 
-number: 5
-name: Uninitialized Group Fixed Response
-expected: |
-  @mention bot in an uninitialized group (no project). Bot responds with fixed message: "本群未完成项目配置，请先在后台完成初始化。配置地址：/api/group-config/{chatId}" - no conversational bootstrap, immediate response.
-awaiting: user response
+[testing complete - bug found and fixed]
 
 ## Tests
 
@@ -46,10 +42,16 @@ expected: After completing config via API, verify Feishu folder contains only PR
 result: pass
 verified: Code verification confirms createWorkspaceSkeleton method removed (02-05-SUMMARY.md). Config completion creates single PROJECT-CONFIG.md via Feishu API. Manual verification recommended: check Feishu folder for configDocToken "IBSQdf47Oo7N5WxTjgxcOiN4neg" contains only PROJECT-CONFIG.md.
 
+### 7. Configured Group Message Response
+expected: @mention bot in a configured group (active session). Bot processes message via PiMonoAdapter, generates reply via reply_group tool, and sends response to Feishu group chat.
+result: pass
+verified: "Fix applied - contextBinding now constructed from runRuntimeTurn input params. reply_group sent: session=chat:oc_a67d8bf658d58e65a7e63f153a693540:manager chatId=oc_a67d8bf658d58e65a7e63f153a693540 length=116"
+fix_commit: "pending - pi-mono.adapter.ts runRuntimeTurn contextBinding fix"
+
 ## Summary
 
-total: 6
-passed: 6
+total: 7
+passed: 7
 issues: 0
 pending: 0
 skipped: 0
@@ -57,4 +59,4 @@ blocked: 0
 
 ## Gaps
 
-[none - all tests passed]
+[none - bug fixed and verified]

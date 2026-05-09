@@ -1694,7 +1694,12 @@ export class PiMonoAdapter {
     );
     const state = input.state;
     const turn = state.currentTurn;
-    const contextBinding = state.currentContext;
+    // Build contextBinding from input params - state.currentContext is cleared by executeGroupRuntimePrompt finally block
+    const contextBinding: SimplifiedContextBinding = {
+      projectId: input.project.id,
+      environmentId: input.environment.id,
+      feishuChatId: input.project.feishuChatId,
+    };
     if (!turn) {
       this.logger.warn(
         `[RUNTIME TURN] aborted: no currentTurn found for session=${state.runtimeSessionKey}`,
@@ -1797,7 +1802,11 @@ export class PiMonoAdapter {
       }
 
       if (action.type === 'reply_group') {
-        // Reply is captured in turn_completed - no separate event needed
+        const text = action.text.trim();
+        if (text && contextBinding?.feishuChatId) {
+          await this.feishu.sendTextMessage('chat_id', contextBinding.feishuChatId, text);
+          this.logger.log(`reply_group sent: session=${state.runtimeSessionKey} chatId=${contextBinding.feishuChatId} length=${text.length}`);
+        }
         continue;
       }
 
