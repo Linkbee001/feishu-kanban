@@ -849,9 +849,8 @@ export class AdminService {
         return `${eventType}: ${JSON.stringify(payload).slice(0, 100)}...`;
     }
   }
-}
 
-/**
+  /**
    * Get dashboard statistics
    * Returns counts of groups, sessions, messages, and runs
    */
