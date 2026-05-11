@@ -1,8 +1,8 @@
 # Project Roadmap
 
 **Project:** feishu-kanban
-**Status:** Complete — Phase 07 Admin Dashboard V2 (2026-05-09)
-**Last Updated:** 2026-05-09
+**Status:** Planned — Phase 08 Admin Dashboard Redesign (2026-05-11)
+**Last Updated:** 2026-05-11
 
 ---
 
@@ -14,12 +14,55 @@
 - ✅ **v1.3.0 — Admin UI Redesign** — Phase 05-admin-ui-redesign (complete 2026-05-08)
 - ✅ **v1.4.0 — Group Config UI** — Phase 06-group-config (complete 2026-05-08)
 - ✅ **v1.5.0 — Admin Dashboard V2** — Phase 07-admin-dashboard-v2 (complete 2026-05-09)
+- 🔄 **v1.6.0 — Admin Dashboard Redesign** — Phase 08-admin-dashboard-redesign (planned 2026-05-11)
 
 ---
 
 ## Current Phase
 
-### Phase 07: Admin Dashboard V2 - Complete Admin Interface with Multi-level Navigation
+### Phase 08: Admin Dashboard Redesign - 基于 shadcn-admin 完全重构管理后台
+
+**Goal:** 基于 shadcn-admin 模板完全重构管理后台，解决现有交互混乱和 bug 问题，建立清晰的管理逻辑和现代化界面。
+
+**Depends on:** Phase 07
+
+**Context:** [.planning/phases/08-admin-dashboard-redesign/08-CONTEXT.md](phases/08-admin-dashboard-redesign/08-CONTEXT.md)  
+**Research:** [.planning/phases/08-admin-dashboard-redesign/08-RESEARCH.md](phases/08-admin-dashboard-redesign/08-RESEARCH.md)
+
+**Status:** Planned — Ready to execute
+
+**Progress:**
+- [x] Context gathered
+- [x] Research complete
+- [x] Planning complete (10 plans, 7 waves)
+- [ ] Execution
+- [ ] Verification
+
+**Plans:** 10/10 plans created
+
+**Wave Structure:**
+- Wave 0: 08-01 (Setup shadcn/ui + Tailwind v4)
+- Wave 1: 08-02 (Layout components)
+- Wave 2: 08-03 (DataTable) + 08-04 (Common UI)
+- Wave 3: 08-05 (Dashboard) + 08-06 (Groups)
+- Wave 4: 08-07 (Messages + Runs) + 08-08 (Settings)
+- Wave 5: 08-09 (Agent Testing Dashboard)
+- Wave 6: 08-10 (Integration + Polish)
+
+**Key Features to Build:**
+- Complete rewrite using shadcn-admin template
+- 30+ shadcn/ui components
+- Tailwind CSS v4 with CSS-first configuration
+- Collapsible sidebar, Header, Breadcrumb
+- DataTable with TanStack Table
+- All management pages (Dashboard, Groups, Messages, Runs, Settings)
+- **Agent Testing Dashboard** — Task trigger, log stream, debug panel
+
+---
+
+## Completed Phases
+
+### Phase 07: Admin Dashboard V2 - Complete Admin Interface with Multi-level Navigation ✓
 
 **Goal:** 重构管理后台，基于 shadcn-admin 模板，实现群管理、会话监控、消息记录、运行日志等功能的完整管理界面。
 

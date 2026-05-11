@@ -1,18 +1,14 @@
 ---
-status: testing
+status: abandoned
 phase: 05-admin-ui-redesign
 source: [05-01-SUMMARY.md, 05-02-SUMMARY.md, 05-03-SUMMARY.md, 05-04-SUMMARY.md, 05-05-SUMMARY.md, 05-06-SUMMARY.md]
 started: 2026-05-08T04:05:00Z
-updated: 2026-05-08T04:05:00Z
+updated: 2026-05-09T07:05:00Z
 ---
 
 ## Current Test
 
-number: 1
-name: D-01 Per-row Action Buttons
-expected: |
-  Robot Instance 表每行末尾有 4 个按钮：创建 Agent Run（绿色）、查看日志（蓝色）、配置项目（灰色）、删除（红色）。按钮可点击，样式正确。
-awaiting: user response
+[abandoned - superseded by Phase 07]
 
 ## Tests
 
