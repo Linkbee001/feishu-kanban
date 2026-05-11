@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.5.0
-milestone_name: Admin Dashboard V2
-current_phase: 07
-status: complete
-last_updated: "2026-05-09T00:00:00.000Z"
-last_activity: 2026-05-09
+milestone: v1.6.0
+milestone_name: Admin Dashboard Redesign
+current_phase: 08
+status: context_gathered
+last_updated: "2026-05-11T00:00:00.000Z"
+last_activity: 2026-05-11
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 7
   total_plans: 30
   completed_plans: 30
-  percent: 100
+  percent: 87
 ---
 
 # Project State
@@ -88,6 +88,27 @@ All 6 plans executed successfully:
 7. Settings page with SystemSettings persistence
 8. Mobile responsive layout with hamburger menu
 9. EmptyState component for consistent UX across pages
+
+---
+
+## Accumulated Context
+
+### Phase 08: Admin Dashboard Redesign (Context Gathered)
+
+**Status:** Context gathered, ready for research
+
+**Goal:** 基于 shadcn-admin 模板完全重构管理后台，解决现有交互混乱和 bug 问题
+
+**Key Decisions:**
+- **迁移策略:** 完全重写，一次性替换 frontend 目录
+- **UI 组件:** 完整引入 shadcn/ui 组件库
+- **布局架构:** 完全采用 shadcn-admin 布局（可折叠侧边栏、Header、Breadcrumb）
+- **样式系统:** 迁移到标准 Tailwind CSS，删除手动 CSS 工具类
+- **数据表格:** 使用 shadcn-admin 的 DataTable 封装
+- **页面范围:** 全部页面重构（Dashboard、群管理、消息记录、运行日志、设置）
+- **主题支持:** 仅 Light 模式
+
+**Context:** [.planning/phases/08-admin-dashboard-redesign/08-CONTEXT.md](phases/08-admin-dashboard-redesign/08-CONTEXT.md)
 
 ---
 

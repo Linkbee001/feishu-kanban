@@ -146,6 +146,27 @@ Plans:
 
 ---
 
+## Current Phase
+
+### Phase 08: Admin Dashboard Redesign - 基于 shadcn-admin 完全重构管理后台
+
+**Goal:** 基于 shadcn-admin 模板完全重构管理后台，解决现有交互混乱和 bug 问题，建立清晰的管理逻辑和现代化界面。
+
+**Depends on:** Phase 07
+
+**Status:** Not started
+
+**Progress:**
+- [ ] Context gathered
+- [ ] Research complete
+- [ ] Planning complete
+- [ ] Execution
+- [ ] Verification
+
+**Context:** [.planning/phases/08-admin-dashboard-redesign/08-CONTEXT.md](phases/08-admin-dashboard-redesign/08-CONTEXT.md)
+
+---
+
 ## Upcoming Phases
 
-*No upcoming phases planned. All requirements implemented.*
+*Phase 08 in progress.*
