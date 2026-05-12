@@ -312,6 +312,7 @@ model GroupAgentSession {
   currentAgentRunId   String?            @unique @map("current_agent_run_id") @db.Uuid
   activeLockToken     String?            @map("active_lock_token")
   memorySummary       String?            @map("memory_summary")
+  customPrompt        String?            @map("custom_prompt")
   sessionState        Json               @default("{}") @map("session_state")
   summaryPolicyJson   Json               @default("{}") @map("summary_policy_json")
   runtimeStateJson    Json               @default("{}") @map("runtime_state_json")

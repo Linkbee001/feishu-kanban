@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { AdminAuthGuard } from '../../common/auth/admin-auth.guard';
 import { GroupConfigService } from './group-config.service';
 
@@ -14,6 +14,15 @@ export class GroupConfigController {
   @Get(':chatId')
   async getStatus(@Param('chatId') chatId: string) {
     return this.groupConfig.getConfigStatus(chatId);
+  }
+
+  /**
+   * Get full config data for drawer UI.
+   * Returns different data based on session mode (pending_config, active, bootstrap).
+   */
+  @Get(':chatId/full')
+  async getFullConfig(@Param('chatId') chatId: string) {
+    return this.groupConfig.getFullConfig(chatId);
   }
 
   /**
@@ -46,5 +55,14 @@ export class GroupConfigController {
       ownerOpenId: body.ownerOpenId.trim(),
       configMarkdown: body.configMarkdown.trim(),
     });
+  }
+
+  /**
+   * Update config for active groups.
+   * Updates project name, description, customPrompt, policy, and environment settings.
+   */
+  @Patch(':chatId')
+  async updateConfig(@Param('chatId') chatId: string, @Body() body: any) {
+    return this.groupConfig.updateActiveConfig(chatId, body);
   }
 }

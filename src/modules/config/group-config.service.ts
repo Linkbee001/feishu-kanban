@@ -3,8 +3,59 @@ import { AgentRole, GroupSessionMode } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FeishuService } from '../feishu/feishu.service';
 import { GroupAgentSessionService } from '../agent/group-agent-session.service';
+import { GroupPolicyService } from '../project/group-policy.service';
 import { ProjectService } from '../project/project.service';
 import { MarkdownProjectConfigParser } from './project-config.parser';
+
+interface PendingConfigResponse {
+  sessionMode: 'pending_config';
+  chatId: string;
+  chatName?: string;
+  ownerOpenId?: string;
+  memberCount?: number;
+}
+
+interface ActiveConfigResponse {
+  sessionMode: 'active';
+  chatId: string;
+  projectId: string;
+  projectName: string;
+  projectDescription?: string;
+  customPrompt?: string;
+  policy: {
+    enabled: boolean;
+    mentionOnly: boolean;
+    defaultQueueMode: string;
+    allowedSkills: string[];
+  };
+  environment: {
+    repoUrl?: string;
+    repoBranch?: string;
+    modelName?: string;
+  };
+}
+
+interface BootstrapConfigResponse {
+  sessionMode: 'bootstrap';
+  chatId: string;
+}
+
+export type GroupFullConfigResponse = PendingConfigResponse | ActiveConfigResponse | BootstrapConfigResponse;
+
+interface UpdateGroupConfigRequest {
+  projectName?: string;
+  projectDescription?: string;
+  customPrompt?: string;
+  policy?: Partial<{
+    enabled: boolean;
+    mentionOnly: boolean;
+  }>;
+  environment?: Partial<{
+    repoUrl: string;
+    repoBranch: string;
+    modelName: string;
+  }>;
+}
 
 @Injectable()
 export class GroupConfigService {
@@ -14,6 +65,7 @@ export class GroupConfigService {
     private readonly prisma: PrismaService,
     private readonly feishu: FeishuService,
     private readonly groupSessions: GroupAgentSessionService,
+    private readonly policies: GroupPolicyService,
     private readonly projects: ProjectService,
     private readonly parser: MarkdownProjectConfigParser,
   ) {}
@@ -185,5 +237,134 @@ export class GroupConfigService {
       hasProject: Boolean(session?.projectId),
       projectId: session?.projectId ?? undefined,
     };
+  }
+
+  /**
+   * Get full config data for drawer UI.
+   * Returns different data based on session mode.
+   */
+  async getFullConfig(feishuChatId: string): Promise<GroupFullConfigResponse> {
+    const session = await this.prisma.groupAgentSession.findUnique({
+      where: {
+        feishuChatId_agentRole: {
+          feishuChatId,
+          agentRole: AgentRole.manager,
+        },
+      },
+      include: {
+        project: {
+          include: {
+            environments: {
+              where: { type: 'default' },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      return { sessionMode: 'bootstrap', chatId: feishuChatId };
+    }
+
+    if (session.sessionMode === GroupSessionMode.pending_config) {
+      // Try to get cached group info from sessionState
+      const state = this.readSessionState(session.sessionState);
+      return {
+        sessionMode: 'pending_config',
+        chatId: feishuChatId,
+        chatName: state.botBinding?.botName,
+      };
+    }
+
+    if (session.sessionMode === GroupSessionMode.bootstrap) {
+      return { sessionMode: 'bootstrap', chatId: feishuChatId };
+    }
+
+    // Active session - return full config
+    const policy = await this.policies.findByChat(feishuChatId);
+    const env = session.project?.environments?.[0];
+
+    return {
+      sessionMode: 'active',
+      chatId: feishuChatId,
+      projectId: session.projectId!,
+      projectName: session.project?.name ?? '',
+      projectDescription: session.project?.description ?? undefined,
+      customPrompt: session.customPrompt ?? undefined,
+      policy: {
+        enabled: policy?.enabled ?? true,
+        mentionOnly: policy?.mentionOnly ?? true,
+        defaultQueueMode: policy?.defaultQueueMode ?? 'collect',
+        allowedSkills: policy?.allowedSkillsJson as string[] ?? [],
+      },
+      environment: {
+        repoUrl: env?.repoUrl ?? undefined,
+        repoBranch: env?.repoBranch ?? undefined,
+        modelName: env?.modelName ?? undefined,
+      },
+    };
+  }
+
+  /**
+   * Update config for active groups.
+   * Updates project name, description, customPrompt, policy, and environment settings.
+   */
+  async updateActiveConfig(feishuChatId: string, updates: UpdateGroupConfigRequest): Promise<void> {
+    const session = await this.prisma.groupAgentSession.findUnique({
+      where: {
+        feishuChatId_agentRole: { feishuChatId, agentRole: AgentRole.manager },
+      },
+      include: { project: { include: { environments: { where: { type: 'default' } } } } },
+    });
+
+    if (!session || session.sessionMode !== GroupSessionMode.active) {
+      throw new BadRequestException('Cannot update config for non-active session');
+    }
+
+    // Update customPrompt in session
+    if (updates.customPrompt !== undefined) {
+      await this.prisma.groupAgentSession.update({
+        where: { id: session.id },
+        data: { customPrompt: updates.customPrompt },
+      });
+    }
+
+    // Update project name/description
+    if (updates.projectName !== undefined || updates.projectDescription !== undefined) {
+      await this.prisma.project.update({
+        where: { id: session.projectId! },
+        data: {
+          ...(updates.projectName ? { name: updates.projectName } : {}),
+          ...(updates.projectDescription ? { description: updates.projectDescription } : {}),
+        },
+      });
+    }
+
+    // Update policy
+    if (updates.policy) {
+      await this.policies.updateByChat(feishuChatId, updates.policy);
+    }
+
+    // Update environment (repo settings)
+    if (updates.environment && session.project?.defaultEnvironmentId) {
+      await this.prisma.projectEnvironment.update({
+        where: { id: session.project.defaultEnvironmentId },
+        data: {
+          ...(updates.environment.repoUrl ? { repoUrl: updates.environment.repoUrl } : {}),
+          ...(updates.environment.repoBranch ? { repoBranch: updates.environment.repoBranch } : {}),
+          ...(updates.environment.modelName ? { modelName: updates.environment.modelName } : {}),
+        },
+      });
+    }
+  }
+
+  private readSessionState(sessionState: any): { botBinding?: { botName?: string; botOpenId?: string } } {
+    if (!sessionState) return {};
+    try {
+      return sessionState as { botBinding?: { botName?: string; botOpenId?: string } };
+    } catch {
+      return {};
+    }
   }
 }
