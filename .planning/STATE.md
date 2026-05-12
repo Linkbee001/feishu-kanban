@@ -1,25 +1,25 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.6.0
-milestone_name: Admin Dashboard Redesign
-current_phase: 08
-status: planned
-last_updated: "2026-05-11T12:17:00.000Z"
-last_activity: 2026-05-11
+milestone_name: milestone
+current_phase: 08 (Complete)
+status: verifying
+last_updated: "2026-05-12T17:31:34.891Z"
+last_activity: 2026-05-12
 progress:
-  total_phases: 8
-  completed_phases: 7
-  total_plans: 40
+  total_phases: 4
+  completed_phases: 4
+  total_plans: 30
   completed_plans: 30
-  percent: 87
+  percent: 100
 ---
 
 # Project State
 
 **Project:** feishu-kanban
-**Status:** Milestone v1.5.0 Complete — Phase 07 Admin Dashboard V2 finished
-**Current Phase:** 07 (Complete)
-**Last Activity:** 2026-05-09
+**Status:** Milestone v1.6.0 Complete — Phase 08 Admin Dashboard Redesign verified ✓
+**Current Phase:** 08 (Complete)
+**Last Activity:** 2026-05-12
 
 ---
 
@@ -36,7 +36,7 @@ progress:
 - PostgreSQL (Prisma ORM)
 - BullMQ + Redis (queue processing)
 - @mariozechner/pi-coding-agent (AI agent SDK)
-- React 19 + TailwindCSS 4 + React Router v7 (Admin Dashboard, embedded)
+- React 19 + TailwindCSS v4 + React Router v7 (Admin Dashboard, embedded)
 
 ---
 
@@ -50,19 +50,23 @@ progress:
 | v1.3.0 Admin UI Redesign | ✅ Complete | 1 | 100% — 6 plans executed |
 | v1.4.0 Group Config UI | ✅ Complete | 1 | 100% — 4 plans executed |
 | v1.5.0 Admin Dashboard V2 | ✅ Complete | 1 | 100% — 6 plans executed |
+| v1.6.0 Admin Dashboard Redesign | ✅ Complete | 1 | 100% — 10 plans executed |
 
 ---
 
 ## Current Position
 
-Phase: 07 (Admin Dashboard V2) — COMPLETE
+Phase: 08 (Admin Dashboard Redesign) — COMPLETE ✓
 
-All 6 plans executed successfully:
-- Wave 1: Multi-level sidebar navigation + routes + page stubs
-- Wave 2: Groups data table with TanStack Table
-- Wave 3: Drawer for group config editing (480px slide-over)
-- Wave 4: Messages page (chat-style) + Runs page (Terminal-style) — parallel
-- Wave 6: Dashboard + Settings + mobile responsive polish
+All 10 plans executed and verified:
+
+- Wave 0: shadcn/ui + Tailwind v4 setup (CSS fix applied)
+- Wave 1: Layout components (Sidebar, Header, Breadcrumb, AppShell)
+- Wave 2: DataTable + Common UI components
+- Wave 3: Dashboard + Groups pages
+- Wave 4: Messages + Runs + Settings pages
+- Wave 5: Agent Testing Dashboard
+- Wave 6: Integration + Polish
 
 ---
 
@@ -70,45 +74,38 @@ All 6 plans executed successfully:
 
 ```
 /admin/dashboard    → DashboardPage (stats cards, activity, quick actions)
-/admin/group-config → GroupConfigPage (Phase 06 standalone)
-/admin/groups       → GroupsPage (table + drawer)
-/admin/messages     → MessagesPage (chat thread + filters)
-/admin/runs         → RunsPage (Terminal logs + auto-scroll)
+/admin/group-config → GroupConfigPage (standalone page)
+/admin/groups       → GroupsPage (DataTable + Drawer)
+/admin/messages     → MessagesPage (message filters + chat list)
+/admin/runs         → RunsPage (DataTable + Log Viewer)
 /admin/settings     → SettingsPage (system config form)
+/admin/agent-testing → AgentTestingPage (task trigger + log stream)
 ```
 
 **Key Features Built:**
 
-1. Multi-level sidebar with Groups submenu (expandable/collapsible)
-2. Groups table with row actions (配置, 解绑, 查看日志)
-3. Drawer-based config editing without leaving groups page
-4. Chat-style message thread with filters (group, date, type)
-5. Terminal-style run logs with color-coded levels (INFO/EXEC/SUCCESS/WARN/ERROR)
-6. Dashboard with stats cards (total groups, active sessions, today's messages)
-7. Settings page with SystemSettings persistence
-8. Mobile responsive layout with hamburger menu
-9. EmptyState component for consistent UX across pages
+1. Complete rewrite with shadcn-admin template (30+ shadcn/ui components)
+2. Tailwind CSS v4 with @tailwindcss/vite plugin (proper JIT utility generation)
+3. Collapsible sidebar with SidebarProvider/SidebarRail
+4. DataTable with TanStack Table + sorting + pagination
+5. Dashboard with stats cards, activity list, quick actions
+6. Groups management with filter bar + GroupConfigDrawer
+7. Messages page with filters (group, type, date) + message bubbles
+8. Runs page with status filter + terminal-style log viewer
+9. Settings page with Feishu/AI/System configuration sections
+10. Agent Testing Dashboard with task trigger + real-time log stream
+11. Feature-based directory structure (features/layout, dashboard, groups, etc.)
 
 ---
 
-## Accumulated Context
+## Critical Fix Applied (2026-05-12)
 
-### Phase 08: Admin Dashboard Redesign (Context Gathered)
+**CSS Not Displaying Issue:**
 
-**Status:** Context gathered, ready for research
-
-**Goal:** 基于 shadcn-admin 模板完全重构管理后台，解决现有交互混乱和 bug 问题
-
-**Key Decisions:**
-- **迁移策略:** 完全重写，一次性替换 frontend 目录
-- **UI 组件:** 完整引入 shadcn/ui 组件库
-- **布局架构:** 完全采用 shadcn-admin 布局（可折叠侧边栏、Header、Breadcrumb）
-- **样式系统:** 迁移到标准 Tailwind CSS，删除手动 CSS 工具类
-- **数据表格:** 使用 shadcn-admin 的 DataTable 封装
-- **页面范围:** 全部页面重构（Dashboard、群管理、消息记录、运行日志、设置）
-- **主题支持:** 仅 Light 模式
-
-**Context:** [.planning/phases/08-admin-dashboard-redesign/08-CONTEXT.md](phases/08-admin-dashboard-redesign/08-CONTEXT.md)
+- **Root Cause:** Missing `@tailwindcss/vite` plugin in vite.config.ts
+- **Symptom:** CSS was only 23KB (theme variables only, no utility classes)
+- **Fix:** Added `tailwindcss()` to Vite plugins array
+- **Result:** CSS now 74KB with full Tailwind utility classes generated
 
 ---
 
@@ -148,28 +145,36 @@ All 6 plans executed successfully:
 | 2026-05-09 | Phase 06 fix applied (restore route + menu) |
 | 2026-05-09 | Phase 07 Wave 3-6 executed (4 remaining plans) |
 | 2026-05-09 | Milestone v1.5.0 completed |
+| 2026-05-11 | Phase 08 context gathered (Admin Dashboard Redesign) |
+| 2026-05-11 | Phase 08 research completed |
+| 2026-05-11 | Phase 08 planned (10 plans in 7 waves) |
+| 2026-05-11 | Phase 08 executed (10 plans, 7 waves) |
+| 2026-05-12 | Phase 08 CSS issue diagnosed and fixed |
+| 2026-05-12 | Phase 08 UAT completed (20/20 tests passed) |
+| 2026-05-12 | Milestone v1.6.0 completed |
 
 ---
 
 ## Summary
 
-**Phase 07: Admin Dashboard V2** — All requirements implemented:
+**Phase 08: Admin Dashboard Redesign** — All requirements verified:
 
-- Complete admin interface with multi-level navigation
-- Groups management with table + drawer editing
-- Messages history with chat-style thread
-- Run logs with Terminal-style viewer
-- Dashboard with stats and quick actions
-- Settings page with persistence
-- Mobile responsive layout
+- Complete shadcn-admin template integration
+- Tailwind CSS v4 with proper JIT compilation
+- 30+ shadcn/ui components installed
+- All 7 admin pages working (Dashboard, Groups, Messages, Runs, Settings, Agent Testing, Group Config)
+- DataTable with sorting, pagination, filters
+- Real-time log streaming for Agent Testing
+- Responsive layout with collapsible sidebar
 
-**Phase 06 Fix:** Restored `/admin/group-config` route and menu entry that Phase 07 accidentally removed.
+**Critical Fix:** Added @tailwindcss/vite plugin to vite.config.ts, resolving CSS utility class generation issue.
 
-**All milestones complete!** v1.5.0 ships with:
-- Full Admin Dashboard V2 (Phase 07)
-- Group Config UI restored (Phase 06 fix)
-- Previous phases still working
+**All milestones complete!** v1.6.0 ships with:
+
+- Full shadcn-admin based dashboard (Phase 08)
+- Agent Testing Dashboard for managing AI agent tests
+- All previous phases still working
 
 ---
 
-*Last updated: 2026-05-09 after Phase 07 completion*
+*Last updated: 2026-05-12 after Phase 08 verification*
