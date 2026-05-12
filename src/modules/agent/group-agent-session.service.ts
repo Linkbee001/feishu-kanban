@@ -84,7 +84,7 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
         agentRole: role,
         agentScopeKey: this.createAgentScopeKey(context.projectId, role),
         runtimeSessionKey: this.createRuntimeSessionKey(sessionKey, role),
-        sessionMode: context.sessionMode ?? (context.projectId ? GroupSessionMode.active : GroupSessionMode.bootstrap),
+        sessionMode: context.sessionMode ?? (context.projectId ? GroupSessionMode.active : GroupSessionMode.pending_config),
         status: GroupSessionStatus.idle,
         activeEnvironmentId: context.environmentId ?? null,
         summaryPolicyJson: this.toSummaryPolicyJson(this.createDefaultSummaryPolicy()),
@@ -272,7 +272,7 @@ export class GroupAgentSessionService implements GroupAgentSessionAdapter {
       environmentId: input.environmentId ?? null,
       feishuChatId: input.feishuChatId,
       agentRole: AgentRole.manager,
-      sessionMode: input.projectId ? GroupSessionMode.active : GroupSessionMode.bootstrap,
+      sessionMode: input.projectId ? GroupSessionMode.active : GroupSessionMode.pending_config,
     });
     const currentState = this.readSessionState(session.sessionState);
     const currentBinding = currentState.botBinding ?? {};

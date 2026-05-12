@@ -384,7 +384,7 @@ export class FeishuEventService {
     await this.feishu.sendTextMessage(
       'chat_id',
       binding.chatId,
-      '机器人已加入本群并完成绑定。直接 @我 发送需求即可；如果本群还没初始化项目，我会先引导初始化。',
+      '机器人已加入本群。请管理员在后台完成项目配置后再使用。',
     );
   }
 
