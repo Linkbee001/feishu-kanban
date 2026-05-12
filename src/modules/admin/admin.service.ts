@@ -511,7 +511,7 @@ export class AdminService {
     }
 
     return {
-      items: filteredItems,
+      groups: filteredItems,
       total: search ? filteredItems.length : total,
       page,
       limit,
