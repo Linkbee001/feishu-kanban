@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
-import { MessageListItem, MessagesResponse, MessagesQueryParams, MessageType } from '../types/dashboard';
+import { apiGet } from './useApi';
+import { MessageListItem, MessagesResponse, MessageType } from '../types/dashboard';
 
 interface UseMessagesReturn {
   messages: MessageListItem[];
@@ -7,6 +8,7 @@ interface UseMessagesReturn {
   page: number;
   limit: number;
   filters: {
+    search: string;
     group: string;
     startDate: string;
     endDate: string;
@@ -15,87 +17,65 @@ interface UseMessagesReturn {
   loading: boolean;
   error: Error | null;
   setFilters: (filters: Partial<UseMessagesReturn['filters']>) => void;
+  setPage: (page: number) => void;
+  setLimit: (limit: number) => void;
   refetch: () => void;
-  loadMore: () => void;
-  hasMore: boolean;
 }
 
-export function useMessages(initialFilters?: Partial<UseMessagesReturn['filters']>): UseMessagesReturn {
+interface UseMessagesParams {
+  search?: string;
+  group?: string;
+  startDate?: string;
+  endDate?: string;
+  type?: MessageType;
+}
+
+export function useMessages(initialParams?: UseMessagesParams): UseMessagesReturn {
   const [messages, setMessages] = useState<MessageListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState(20);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [filters, setFiltersState] = useState<UseMessagesReturn['filters']>({
-    group: initialFilters?.group ?? '',
-    startDate: initialFilters?.startDate ?? '',
-    endDate: initialFilters?.endDate ?? '',
-    type: initialFilters?.type ?? 'all',
+    search: initialParams?.search ?? '',
+    group: initialParams?.group ?? '',
+    startDate: initialParams?.startDate ?? '',
+    endDate: initialParams?.endDate ?? '',
+    type: initialParams?.type ?? 'all',
   });
 
-  const fetchMessages = useCallback(async (resetPage = false) => {
+  const fetchMessages = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const currentPage = resetPage ? 1 : page;
       const queryParams = new URLSearchParams();
+      if (filters.search) queryParams.set('search', filters.search);
       if (filters.group) queryParams.set('group', filters.group);
       if (filters.startDate) queryParams.set('startDate', filters.startDate);
       if (filters.endDate) queryParams.set('endDate', filters.endDate);
       if (filters.type !== 'all') queryParams.set('type', filters.type);
-      queryParams.set('page', String(currentPage));
+      queryParams.set('page', String(page));
       queryParams.set('limit', String(limit));
 
-      const response = await fetch(`/api/admin/messages?${queryParams.toString()}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch messages: ${response.status}`);
-      }
-
-      const data: MessagesResponse = await response.json();
-      if (resetPage) {
-        setMessages(data.items);
-        setPage(1);
-      } else {
-        setMessages((prev) => [...prev, ...data.items]);
-      }
+      const data = await apiGet<MessagesResponse>(`/admin/messages?${queryParams.toString()}`);
+      setMessages(data.items);
       setTotal(data.total);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      setError(new Error(message));
+      setError(err instanceof Error ? err : new Error('Failed to fetch messages'));
     } finally {
       setLoading(false);
     }
   }, [filters, page, limit]);
 
+  useEffect(() => {
+    fetchMessages();
+  }, [fetchMessages]);
+
   const setFilters = useCallback((newFilters: Partial<UseMessagesReturn['filters']>) => {
     setFiltersState((prev) => ({ ...prev, ...newFilters }));
-    setPage(1); // Reset page when filters change
+    setPage(1);
   }, []);
-
-  const loadMore = useCallback(() => {
-    if (messages.length < total && !loading) {
-      setPage((prev) => prev + 1);
-    }
-  }, [messages.length, total, loading]);
-
-  const hasMore = messages.length < total;
-
-  // Fetch when filters or page changes
-  useEffect(() => {
-    fetchMessages(true);
-  }, [filters.group, filters.startDate, filters.endDate, filters.type]);
-
-  // Fetch additional page when page increments
-  useEffect(() => {
-    if (page > 1) {
-      fetchMessages(false);
-    }
-  }, [page]);
 
   return {
     messages,
@@ -106,8 +86,8 @@ export function useMessages(initialFilters?: Partial<UseMessagesReturn['filters'
     loading,
     error,
     setFilters,
-    refetch: () => fetchMessages(true),
-    loadMore,
-    hasMore,
+    setPage,
+    setLimit,
+    refetch: fetchMessages,
   };
 }
