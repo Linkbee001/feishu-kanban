@@ -1,0 +1,145 @@
+{
+  "results": [
+    {
+      "name": "Cold Start - Dashboard Loads",
+      "expected": "Dashboard page loads without errors at /admin/dashboard",
+      "status": "pass",
+      "details": "Status: 200, Title: Admin Dashboard"
+    },
+    {
+      "name": "Sidebar Navigation",
+      "expected": "Sidebar visible with navigation items: Dashboard, Groups, Messages, Runs, Agent Testing, Settings",
+      "status": "pass",
+      "details": "Found 6 nav items: Dashboard, 群管理, 消息记录, 运行日志, Agent测试New, 系统设置"
+    },
+    {
+      "name": "Sidebar Collapse/Expand",
+      "expected": "Clicking sidebar rail collapses and expands the sidebar",
+      "status": "pass",
+      "details": "Initial: 240px, Collapsed: 50px, Expanded: 240px"
+    },
+    {
+      "name": "Dashboard Page Content",
+      "expected": "Dashboard shows stats cards, activity section, quick actions",
+      "status": "pass",
+      "details": "Cards found: 17, Has title: true, Has grid: true, Activity: true, Quick actions: true"
+    },
+    {
+      "name": "Navigate to Groups Page",
+      "expected": "Clicking Groups in sidebar navigates to /admin/groups, shows DataTable with filters",
+      "status": "pass",
+      "details": "URL: http://localhost:3000/admin/groups, Table: true, Headers: 6, Filter: true"
+    },
+    {
+      "name": "Groups Search and Filter",
+      "expected": "Search input and status filter dropdown available on Groups page",
+      "status": "pass",
+      "details": "Search input: true, Status filter: true"
+    },
+    {
+      "name": "Groups Search and Filter",
+      "expected": "Search input and status filter available",
+      "status": "issue",
+      "details": "Error: searchInput.clear is not a function"
+    },
+    {
+      "name": "Groups Configure Drawer",
+      "expected": "Clicking Configure opens a drawer/dialog for group configuration",
+      "status": "pass",
+      "details": "Drawer opened: true"
+    },
+    {
+      "name": "Messages Page",
+      "expected": "Messages page shows filters (search, group, type) and message display area",
+      "status": "pass",
+      "details": "Search: true, Group filter: true, Type filter: true, Message area: true"
+    },
+    {
+      "name": "Runs Page",
+      "expected": "Runs page shows DataTable with status filter and log viewer access",
+      "status": "pass",
+      "details": "Table: true, Headers: 6, Status filter: true"
+    },
+    {
+      "name": "Runs Log Viewer",
+      "expected": "Clicking View Logs opens a drawer with terminal-style log display",
+      "status": "pass",
+      "details": "Log viewer opened: true, Terminal style: true"
+    },
+    {
+      "name": "Settings Page",
+      "expected": "Settings page shows Feishu config, AI config, System preferences sections with save button",
+      "status": "pass",
+      "details": "Inputs: 6, Switches: 2, Save: true, Feishu: true, AI: true, System: true"
+    },
+    {
+      "name": "Agent Testing Page",
+      "expected": "Agent Testing page shows task trigger panel (group, skill, intent) and log stream",
+      "status": "pass",
+      "details": "Group selector: true, Skill: true, Intent: true, Trigger: true, Log stream: true"
+    },
+    {
+      "name": "Breadcrumb Navigation",
+      "expected": "Breadcrumb shows current page path (Admin > Agent Testing)",
+      "status": "pass",
+      "details": "Breadcrumb items: 3"
+    },
+    {
+      "name": "Header Component",
+      "expected": "Header shows sidebar trigger, search, notification bell, user avatar",
+      "status": "pass",
+      "details": "Sidebar trigger: true, Search: true, Bell: true, Avatar: true"
+    },
+    {
+      "name": "Responsive Layout (Mobile)",
+      "expected": "On mobile viewport, sidebar collapses and content is accessible",
+      "status": "pass",
+      "details": "Sidebar hidden on mobile: true"
+    },
+    {
+      "name": "Quick Actions",
+      "expected": "Dashboard quick action buttons navigate to correct pages",
+      "status": "pass",
+      "details": "Quick action links found: 6"
+    },
+    {
+      "name": "Root Redirect",
+      "expected": "/admin redirects to /admin/dashboard",
+      "status": "pass",
+      "details": "Final URL: http://localhost:3000/admin/dashboard"
+    },
+    {
+      "name": "Group Config Standalone Page",
+      "expected": "/admin/group-config page loads with group configuration form",
+      "status": "pass",
+      "details": "Has content: true, Body length: 319"
+    },
+    {
+      "name": "API Error Handling",
+      "expected": "Pages handle API errors gracefully with error messages or empty states",
+      "status": "pass",
+      "details": "Error visible: false, Data/empty state: true"
+    },
+    {
+      "name": "404 Page",
+      "expected": "Non-existent routes show 404 page",
+      "status": "pass",
+      "details": "404 content found: true"
+    },
+    {
+      "name": "CSS Styles Applied",
+      "expected": "Tailwind CSS utilities are applied correctly (backgrounds, fonts, spacing)",
+      "status": "pass",
+      "details": "Body bg: oklch(1 0 0), Sidebar bg: rgb(250, 250, 249), Font: Inter, \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
+    },
+    {
+      "name": "DataTable Sorting",
+      "expected": "Clicking sortable column header sorts the table",
+      "status": "pass",
+      "details": "Sortable header clicked and responded"
+    }
+  ],
+  "passed": 22,
+  "issues": 1,
+  "total": 23
+}
