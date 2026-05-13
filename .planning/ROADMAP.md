@@ -74,7 +74,7 @@ Plans:
 - [x] 08-09-PLAN.md — Wave 5: Agent Testing Dashboard
 - [x] 08-10-PLAN.md — Wave 6: Integration + Polish
 - [x] 08-11-PLAN.md — Wave 7: Backend search + DateRangePicker components (D-17, D-18)
-- [ ] 08-12-PLAN.md — Wave 8: useMessages hook + MessageFilters rewrite (D-16, D-17, D-18)
+- [x] 08-12-PLAN.md — Wave 8: useMessages hook + MessageFilters rewrite (D-16, D-17, D-18)
 - [ ] 08-13-PLAN.md — Wave 9: Messages page grouped DataTable layout (D-08 to D-15, D-19)
 
 ---
