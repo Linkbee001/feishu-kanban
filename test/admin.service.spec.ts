@@ -204,7 +204,7 @@ describe('AdminService', () => {
     };
 
     return {
-      service: new AdminService(prisma as any, runtime as any, feishu as any, policies as any, memberProfiles as any, repoSync as any),
+      service: new AdminService(prisma as any, runtime as any, feishu as any, policies as any, memberProfiles as any, {} as any, repoSync as any),
       prisma,
       runtime,
       feishu,
