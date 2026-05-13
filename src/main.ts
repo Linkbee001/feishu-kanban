@@ -13,8 +13,9 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
 
   // Serve frontend static assets at /admin route
-  // Use process.cwd() to get project root, which works in both dev and compiled mode
-  const frontendPath = path.join(process.cwd(), 'frontend', 'dist');
+  // Use __dirname to get the directory of the current file, which works in both dev and compiled mode
+  // In compiled mode: dist/src/main.js -> __dirname is dist/src/ -> go up 2 levels to reach project root
+  const frontendPath = path.join(__dirname, '..', '..', 'frontend', 'dist');
 
   // Serve assets at root level for script/stylesheet URLs (e.g., /assets/index.js)
   // Add CORS headers for crossorigin attribute support

@@ -1,50 +1,58 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useCallback } from 'react';
 
-interface LogPollResult {
-  logs: any[];
-  lastFetched: number | null;
-  error: Error | null;
+export interface LogLine {
+  id: string;
+  level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | 'EXEC' | 'SUCCESS';
+  message: string;
+  timestamp: string;
 }
 
-export function useLogPoll(chatId: string, interval = 5000): LogPollResult {
-  const [logs, setLogs] = useState<any[]>([]);
-  const [lastFetched, setLastFetched] = useState<number | null>(null);
+interface UseLogPollReturn {
+  logs: LogLine[];
+  loading: boolean;
+  error: Error | null;
+  isPolling: boolean;
+}
+
+export function useLogPoll(runId: string | null, enabled: boolean = true): UseLogPollReturn {
+  const [logs, setLogs] = useState<LogLine[]>([]);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
-
-    const fetchLogs = async () => {
-      try {
-        const since = lastFetched ?? Date.now() - interval;
-        const url = `/api/admin/robot-instances/${encodeURIComponent(chatId)}/logs?since=${since}&limit=20`;
-
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`API error: ${response.status}`);
-
-        const data = await response.json();
-        if (mounted) {
-          // Append new events, keep max 100
-          const newEvents = data.runtimeEvents || [];
-          setLogs(prev => [...prev.slice(-80), ...newEvents].slice(-100));
-          setLastFetched(Date.now());
-          setError(null);
-        }
-      } catch (err) {
-        if (mounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-        }
+  const fetchLogs = useCallback(async () => {
+    if (!runId) return;
+    
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/admin/runs/${runId}/logs`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
       }
-    };
+      const data = await response.json();
+      setLogs(data.logs || []);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error('Failed to fetch logs'));
+    } finally {
+      setLoading(false);
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    if (!enabled || !runId) {
+      setLogs([]);
+      return;
+    }
 
     fetchLogs();
-    const timer = setInterval(fetchLogs, interval);
+    const interval = setInterval(fetchLogs, 2000);
+    return () => clearInterval(interval);
+  }, [enabled, runId, fetchLogs]);
 
-    return () => {
-      mounted = false;
-      clearInterval(timer);
-    };
-  }, [chatId, interval, lastFetched]);
-
-  return { logs, lastFetched, error };
+  return {
+    logs,
+    loading,
+    error,
+    isPolling: enabled && !!runId,
+  };
 }

@@ -3,7 +3,7 @@
  * Types for RobotInstance and AgentRun data from backend API
  */
 
-import { ColumnDef } from '@tanstack/react-table';
+import type { ColumnDef } from '@tanstack/react-table';
 
 /**
  * Status values for runtime and agent runs
@@ -45,3 +45,34 @@ export interface AgentRun {
  * Used by TanStack Table in RobotInstanceTable component
  */
 export type RobotInstanceColumns = ColumnDef<RobotInstance>[];
+
+// Additional admin types
+export interface SystemSettings {
+  id: string;
+  key: string;
+  value: string;
+  description?: string;
+  updatedAt: string;
+}
+
+export interface UpdateSettingRequest {
+  value: string;
+}
+
+export interface LogEntry {
+  id: string;
+  level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
+  message: string;
+  timestamp: string;
+  context?: Record<string, unknown>;
+}
+
+export interface Run {
+  id: string;
+  chatId: string;
+  chatName?: string;
+  status: 'queued' | 'completed' | 'failed';
+  skillName?: string;
+  intent?: string;
+  createdAt?: string;
+}

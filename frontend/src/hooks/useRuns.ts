@@ -1,55 +1,49 @@
-import { useState, useCallback, useEffect } from 'react';
-import { AgentRun, RunsResponse, LogLine, RunLogsResponse } from '../types/dashboard';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { AgentRun, LogLine, RunLogsResponse } from '../types/dashboard';
+
+interface UseRunsParams {
+  group?: string;
+}
 
 interface UseRunsReturn {
   runs: AgentRun[];
   total: number;
-  page: number;
-  limit: number;
   loading: boolean;
   error: Error | null;
   refetch: () => void;
-
-  // Run-specific logs
   logs: LogLine[];
   runId: string | null;
   runStatus: string | null;
   setRunId: (id: string | null) => void;
   logsLoading: boolean;
-  logsError: Error | null;
-
-  // Polling for active runs
   autoRefresh: boolean;
   setAutoRefresh: (enabled: boolean) => void;
-
-  // Clear local logs
   clearLogs: () => void;
 }
 
-export function useRuns(initialOptions?: { group?: string; page?: number; limit?: number }): UseRunsReturn {
+export function useRuns(params: UseRunsParams = {}): UseRunsReturn {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(initialOptions?.page ?? 1);
-  const [limit, setLimit] = useState(initialOptions?.limit ?? 50);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const [logs, setLogs] = useState<LogLine[]>([]);
-  const [runId, setRunId] = useState<string | null>(null);
+  const [runId, setRunIdState] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [logsLoading, setLogsLoading] = useState(false);
-  const [logsError, setLogsError] = useState<Error | null>(null);
-
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Fetch runs list
   const fetchRuns = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const queryParams = new URLSearchParams();
-      if (initialOptions?.group) queryParams.set('group', initialOptions.group);
-      queryParams.set('page', String(page));
-      queryParams.set('limit', String(limit));
+      queryParams.set('page', '1');
+      queryParams.set('limit', '50');
+      if (params.group) queryParams.set('group', params.group);
 
       const response = await fetch(`/api/admin/runs?${queryParams.toString()}`, {
         method: 'GET',
@@ -60,83 +54,89 @@ export function useRuns(initialOptions?: { group?: string; page?: number; limit?
         throw new Error(`Failed to fetch runs: ${response.status}`);
       }
 
-      const data: RunsResponse = await response.json();
-      setRuns(data.items);
-      setTotal(data.total);
+      const data = await response.json();
+      setRuns(data.items || []);
+      setTotal(data.total || 0);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       setError(new Error(message));
     } finally {
       setLoading(false);
     }
-  }, [initialOptions?.group, page, limit]);
+  }, [params.group]);
 
+  // Fetch logs for a specific run
   const fetchLogs = useCallback(async (id: string) => {
     setLogsLoading(true);
-    setLogsError(null);
     try {
-      const response = await fetch(`/api/admin/runs/${encodeURIComponent(id)}/logs`, {
+      const response = await fetch(`/api/admin/runs/${id}/logs`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch run logs: ${response.status}`);
+        throw new Error(`Failed to fetch logs: ${response.status}`);
       }
 
       const data: RunLogsResponse = await response.json();
-      setLogs(data.logs);
+      setLogs(data.logs || []);
       setRunStatus(data.runStatus);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      setLogsError(new Error(message));
+      console.error('Error fetching logs:', err);
     } finally {
       setLogsLoading(false);
     }
   }, []);
 
+  // Set run ID and fetch logs
+  const setRunId = useCallback((id: string | null) => {
+    setRunIdState(id);
+    if (id) {
+      fetchLogs(id);
+    } else {
+      setLogs([]);
+      setRunStatus(null);
+    }
+  }, [fetchLogs]);
+
+  // Clear logs
   const clearLogs = useCallback(() => {
+    setRunIdState(null);
     setLogs([]);
-    setRunId(null);
     setRunStatus(null);
   }, []);
 
-  // Fetch runs on mount and when params change
+  // Poll logs when auto-refresh is enabled
+  useEffect(() => {
+    if (runId && autoRefresh) {
+      pollIntervalRef.current = setInterval(() => {
+        fetchLogs(runId);
+      }, 3000);
+    }
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, [runId, autoRefresh, fetchLogs]);
+
+  // Initial fetch
   useEffect(() => {
     fetchRuns();
   }, [fetchRuns]);
 
-  // Fetch logs when runId changes
-  useEffect(() => {
-    if (runId) {
-      fetchLogs(runId);
-    }
-  }, [runId, fetchLogs]);
-
-  // Polling for active runs
-  useEffect(() => {
-    if (autoRefresh && runId && runStatus === 'running') {
-      const interval = setInterval(() => fetchLogs(runId), 3000);
-      return () => clearInterval(interval);
-    }
-  }, [autoRefresh, runId, runStatus, fetchLogs]);
-
   return {
     runs,
     total,
-    page,
-    limit,
     loading,
     error,
-    refetch: fetchRuns,
-
+    refetch: () => fetchRuns(),
     logs,
     runId,
     runStatus,
     setRunId,
     logsLoading,
-    logsError,
-
     autoRefresh,
     setAutoRefresh,
     clearLogs,

@@ -1,84 +1,79 @@
-import { useState, useEffect, useCallback } from 'react';
+﻿import { useState, useEffect, useCallback } from 'react';
 
-interface ApiResponse<T> {
+const API_BASE_URL = '/api';
+
+async function handleResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: 'Unknown error' }));
+    throw new Error(error.message || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function apiGet<T>(endpoint: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`);
+  return handleResponse<T>(response);
+}
+
+export async function apiPost<T>(endpoint: string, data: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<T>(response);
+}
+
+export async function apiPatch<T>(endpoint: string, data: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<T>(response);
+}
+
+export async function apiDelete<T>(endpoint: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<T>(response);
+}
+
+interface UseApiState<T> {
   data: T | null;
   loading: boolean;
   error: Error | null;
-  refetch: () => void;
 }
 
-export function useApi<T>(url: string, options?: {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
-  body?: unknown;
-  deps?: unknown[];
-}): ApiResponse<T> {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+interface UseApiReturn<T> extends UseApiState<T> {
+  refetch: () => Promise<void>;
+}
+
+export function useApi<T>(endpoint: string): UseApiReturn<T> {
+  const [state, setState] = useState<UseApiState<T>>({
+    data: null,
+    loading: true,
+    error: null,
+  });
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const response = await fetch(url, {
-        method: options?.method ?? 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: options?.body ? JSON.stringify(options.body) : undefined,
+      const data = await apiGet<T>(endpoint);
+      setState({ data, loading: false, error: null });
+    } catch (error) {
+      setState({
+        data: null,
+        loading: false,
+        error: error instanceof Error ? error : new Error('Unknown error'),
       });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-
-      const json = await response.json();
-      setData(json);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Unknown error'));
-    } finally {
-      setLoading(false);
     }
-  }, [url, options?.method, options?.body]);
+  }, [endpoint]);
 
   useEffect(() => {
     fetchData();
-  }, [fetchData, ...(options?.deps ?? [])]);
+  }, [fetchData]);
 
-  return { data, loading, error, refetch: fetchData };
-}
-
-export async function apiPost<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-  return response.json();
-}
-
-export async function apiPatch<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(url, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-  return response.json();
-}
-
-export async function apiDelete<T>(url: string): Promise<T> {
-  const response = await fetch(url, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-  return response.json();
+  return { ...state, refetch: fetchData };
 }
