@@ -6,26 +6,47 @@
 export type GroupStatus = 'bound' | 'pending_config' | 'unbound';
 
 export interface GroupListItem {
+  id: string;
   chatId: string;
   name: string;
   memberCount: number;
   status: GroupStatus;
   createdAt: string;
-  lastActiveAt: string;
+  lastActiveAt?: string;
 }
 
-export interface GroupsResponse {
-  items: GroupListItem[];
+export interface GroupListResponse {
+  groups: GroupListItem[];
   total: number;
   page: number;
   limit: number;
 }
+
+// Alias for compatibility
+export type GroupsResponse = GroupListResponse;
 
 export interface GroupsQueryParams {
   status?: GroupStatus;
   search?: string;
   page?: number;
   limit?: number;
+}
+
+export interface DashboardStats {
+  totalGroups: number;
+  activeSessions: number;
+  pendingConfig: number;
+  todayMessages: number;
+  totalRuns: number;
+}
+
+export interface ActivityItem {
+  id: string;
+  type: 'config_update' | 'task_complete' | 'group_bind' | 'message_received';
+  title: string;
+  description: string;
+  timestamp: string;
+  link?: string | null;
 }
 
 // Message types
@@ -56,17 +77,21 @@ export interface MessagesQueryParams {
   startDate?: string;
   endDate?: string;
   type?: MessageType;
+  search?: string;
   page?: number;
   limit?: number;
 }
 
 // Run/Log types
-export type LogLevel = 'INFO' | 'EXEC' | 'SUCCESS' | 'WARN' | 'ERROR';
+export type LogLevel = 'INFO' | 'EXEC' | 'SUCCESS' | 'WARN' | 'ERROR' | 'DEBUG';
 
 export interface LogLine {
   timestamp: string;
   level: LogLevel;
   message: string;
+  eventType?: string;
+  createdAt?: string;
+  payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 

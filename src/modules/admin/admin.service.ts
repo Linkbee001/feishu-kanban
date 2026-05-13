@@ -535,10 +535,11 @@ export class AdminService {
     startDate?: string;
     endDate?: string;
     type?: 'all' | 'user' | 'bot';
+    search?: string;
     page: number;
     limit: number;
   }) {
-    const { group, startDate, endDate, type, page, limit } = options;
+    const { group, startDate, endDate, type, search, page, limit } = options;
     const skip = (page - 1) * limit;
 
     // Build where clause for MessageSource
@@ -546,6 +547,26 @@ export class AdminService {
     if (group) {
       messageWhere.feishuChatId = group;
     }
+
+    // Search filter: match rawText or sender name (via profile lookup)
+    if (search) {
+      const matchingSenders = await this.prisma.projectMemberProfile.findMany({
+        where: {
+          OR: [
+            { displayName: { contains: search, mode: 'insensitive' } },
+            { groupNickname: { contains: search, mode: 'insensitive' } },
+          ],
+        },
+        select: { openId: true },
+      });
+      const senderOpenIds = matchingSenders.map((s) => s.openId);
+
+      messageWhere.OR = [
+        { rawText: { contains: search, mode: 'insensitive' } },
+        ...(senderOpenIds.length > 0 ? [{ senderOpenId: { in: senderOpenIds } }] : []),
+      ];
+    }
+
     if (startDate) {
       messageWhere.receivedAt = { ...messageWhere.receivedAt, gte: new Date(startDate) };
     }

@@ -112,6 +112,7 @@ export class AdminController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('type') type?: 'all' | 'user' | 'bot',
+    @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -120,6 +121,7 @@ export class AdminController {
       startDate,
       endDate,
       type,
+      search,
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 50,
     });
