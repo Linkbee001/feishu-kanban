@@ -82,6 +82,13 @@ export interface MessagesQueryParams {
   limit?: number;
 }
 
+export interface MessageGroup {
+  chatId: string;
+  chatName: string;
+  messages: MessageListItem[];
+  lastActivity: string; // ISO timestamp of most recent message
+}
+
 // Run/Log types
 export type LogLevel = 'INFO' | 'EXEC' | 'SUCCESS' | 'WARN' | 'ERROR' | 'DEBUG';
 
