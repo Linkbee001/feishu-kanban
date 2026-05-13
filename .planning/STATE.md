@@ -4,7 +4,7 @@ milestone: v1.6.0
 milestone_name: milestone
 current_phase: Complete
 status: complete
-last_updated: "2026-05-13T12:00:00Z"
+last_updated: "2026-05-13T15:30:00Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 4
@@ -167,6 +167,7 @@ All 13 plans executed and verified. UAT passed with 30/30 tests.
 | 2026-05-13 | Phase 08 Plan 12 executed (useMessages hook + MessageFilters rewrite) |
 | 2026-05-13 | Phase 08 Plan 13 executed (Messages page grouped DataTable layout) |
 | 2026-05-13 | Phase 08 UAT completed (30/30 tests passed via Playwright) |
+| 2026-05-13 | Phase 08 Docker image rebuilt with latest frontend code |
 | 2026-05-13 | Milestone v1.6.0 completed |
 
 ---
