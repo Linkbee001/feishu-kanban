@@ -1,13 +1,15 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useSearchParams } from 'react-router';
+import { format } from 'date-fns';
 import { MessageFilters } from './components/message-filters';
 import { MessageList } from './components/message-list';
 import { useMessages } from '@/hooks/useMessages';
+import { useGroups } from '@/hooks/useGroups';
 import { MessageType } from '@/types/dashboard';
 import { type DateRange } from '@/components/ui/date-range-picker';
 
 export function MessagesPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const groupFromUrl = searchParams.get('group') || '';
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -20,20 +22,17 @@ export function MessagesPage() {
     filters,
     setFilters: setActiveFilters,
     refetch,
+    page,
+    limit,
+    setPage,
+    setLimit,
   } = useMessages({
     group: groupFromUrl,
     type: 'all',
   });
 
-  // Sync URL params when filters change
-  useEffect(() => {
-    const params = new URLSearchParams();
-    if (filters.group) params.set('group', filters.group);
-    if (filters.startDate) params.set('startDate', filters.startDate);
-    if (filters.endDate) params.set('endDate', filters.endDate);
-    if (filters.type !== 'all') params.set('type', filters.type);
-    setSearchParams(params, { replace: true });
-  }, [filters.group, filters.startDate, filters.endDate, filters.type, setSearchParams]);
+  // Fetch groups for name lookup in MessageList
+  const { groups } = useGroups({ limit: 100 });
 
   const handleSearchChange = useCallback((value: string) => {
     setActiveFilters({ search: value });
@@ -50,8 +49,8 @@ export function MessagesPage() {
   const handleDateRangeChange = useCallback((value: DateRange | undefined) => {
     setDateRange(value);
     setActiveFilters({
-      startDate: value?.from ? value.from.toISOString().split('T')[0] : '',
-      endDate: value?.to ? value.to.toISOString().split('T')[0] : '',
+      startDate: value?.from ? format(value.from, 'yyyy-MM-dd') : '',
+      endDate: value?.to ? format(value.to, 'yyyy-MM-dd') : '',
     });
   }, [setActiveFilters]);
 
@@ -89,7 +88,13 @@ export function MessagesPage() {
       {/* Message List */}
       <MessageList
         messages={messages}
+        groups={groups}
         loading={loading}
+        total={total}
+        page={page}
+        limit={limit}
+        onPageChange={setPage}
+        onLimitChange={setLimit}
       />
     </div>
   );
